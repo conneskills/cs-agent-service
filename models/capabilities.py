@@ -4,7 +4,7 @@ Agent Capabilities Management - Skills, Tools, RAGs, and more.
 This module defines the complete agent capability model.
 """
 
-from typing import Optional, list
+from typing import Optional
 from enum import Enum
 from pydantic import BaseModel, Field
 from datetime import datetime
@@ -40,6 +40,15 @@ class RAGType(str, Enum):
     KNOWLEDGE_BASE = "knowledge_base"
     WEB_SEARCH = "web_search"
     DOCUMENT = "document"
+
+
+class ExecutionType(str, Enum):
+    """How the agent service executes."""
+    SINGLE = "single"
+    SEQUENTIAL = "sequential"
+    PARALLEL = "parallel"
+    COORDINATOR = "coordinator"
+    HUB_SPOKE = "hub-spoke"
 
 
 # ============================================================================
@@ -134,6 +143,57 @@ class RAGConfig(BaseModel):
 
 
 # ============================================================================
+# RUNTIME CONFIG (dynamic agent service)
+# ============================================================================
+
+class RoleConfig(BaseModel):
+    """Configuration for a single role within an agent service."""
+    name: str = Field(..., description="Role name (e.g., researcher, analyzer)")
+    prompt_ref: Optional[str] = Field(None, description="Reference to prompt in registry")
+    prompt_inline: Optional[str] = Field(None, description="Inline prompt text (if no prompt_ref)")
+    tools: list[str] = Field(
+        default_factory=lambda: ["Bash", "Read", "Grep", "Glob"],
+        description="Claude Agent SDK tool names for this role"
+    )
+    max_turns: int = Field(default=10, ge=1, le=50)
+    model: Optional[str] = Field(None, description="LLM model override for this role")
+    metadata: dict = Field(default_factory=dict)
+
+
+class RuntimeConfig(BaseModel):
+    """Runtime configuration for dynamic agent services.
+
+    Determines how a single container behaves: as one agent, a pipeline,
+    parallel workers, or any other execution pattern. The container reads
+    this config from the Registry API at startup via AGENT_ID.
+    """
+    execution_type: ExecutionType = Field(
+        default=ExecutionType.SINGLE,
+        description="How the agent service executes"
+    )
+    roles: list[RoleConfig] = Field(
+        default_factory=list,
+        description="Roles in this agent service"
+    )
+    permission_mode: str = Field(default="bypassPermissions")
+
+    # Sequential config
+    chain_output: bool = Field(default=True, description="Sequential: chain output between roles")
+
+    # Parallel config
+    parallel_roles: list[str] = Field(default_factory=list, description="Parallel: which roles run in parallel")
+    aggregator_role: Optional[str] = Field(None, description="Parallel: role that aggregates results")
+
+    # Coordinator config
+    coordinator_role: Optional[str] = Field(None, description="Coordinator: role that decides routing")
+    worker_roles: list[str] = Field(default_factory=list, description="Coordinator: available worker roles")
+
+    # Hub-spoke config
+    hub_role: Optional[str] = Field(None, description="Hub-spoke: hub role name")
+    spoke_roles: list[str] = Field(default_factory=list, description="Hub-spoke: spoke role names")
+
+
+# ============================================================================
 # CAPABILITIES
 # ============================================================================
 
@@ -198,6 +258,12 @@ class CompleteAgentCard(BaseModel):
     is_discoverable: bool = True
     
     metadata: dict = Field(default_factory=dict)
+
+    # Runtime (dynamic agent service)
+    runtime_config: Optional[RuntimeConfig] = None
+    deployment_status: Optional[str] = None  # pending|deploying|running|failed|stopped
+    cloud_run_url: Optional[str] = None
+    cloud_run_service: Optional[str] = None
 
 
 # ============================================================================

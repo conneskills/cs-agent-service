@@ -36,6 +36,9 @@ from models.capabilities import (
     AgentType,
     ToolProvider,
     RAGType,
+    ExecutionType,
+    RoleConfig,
+    RuntimeConfig,
     ArchitectureDefinition,
     AgentReference,
     SkillMatcher,
@@ -124,6 +127,15 @@ class RAGCreate(BaseModel):
     metadata: dict = {}
 
 
+class PromptCreate(BaseModel):
+    name: str
+    description: str = ""
+    template: str  # The prompt text, may contain {variables}
+    variables: list[str] = []  # Expected variable names
+    tags: list[str] = []
+    metadata: dict = {}
+
+
 class AgentCreate(BaseModel):
     name: str
     description: str
@@ -152,6 +164,20 @@ class AgentCreate(BaseModel):
     team: Optional[str] = None
     is_public: bool = False
     metadata: dict = {}
+
+    # Runtime config (optional - if present, agent is dynamic)
+    execution_type: Optional[str] = None  # single|sequential|parallel|coordinator|hub-spoke
+    roles: list[dict] = []  # [{"name": "researcher", "prompt_ref": "p-123", "tools": [...]}]
+    permission_mode: str = "bypassPermissions"
+
+    # Pattern-specific config
+    chain_output: bool = True
+    parallel_roles: list[str] = []
+    aggregator_role: Optional[str] = None
+    coordinator_role: Optional[str] = None
+    worker_roles: list[str] = []
+    hub_role: Optional[str] = None
+    spoke_roles: list[str] = []
 
 
 class ArchitectureCreate(BaseModel):
@@ -204,6 +230,10 @@ def to_dict(card: CompleteAgentCard) -> dict:
         "created_at": card.created_at.isoformat() if card.created_at else None,
         "updated_at": card.updated_at.isoformat() if card.updated_at else None,
         "metadata": card.metadata,
+        "runtime_config": card.runtime_config.model_dump() if card.runtime_config else None,
+        "deployment_status": card.deployment_status,
+        "cloud_run_url": card.cloud_run_url,
+        "cloud_run_service": card.cloud_run_service,
     }
 
 
@@ -230,6 +260,10 @@ def from_dict(data: dict) -> CompleteAgentCard:
         created_at=datetime.fromisoformat(data["created_at"]) if data.get("created_at") else None,
         updated_at=datetime.fromisoformat(data["updated_at"]) if data.get("updated_at") else None,
         metadata=data.get("metadata", {}),
+        runtime_config=RuntimeConfig(**data["runtime_config"]) if data.get("runtime_config") else None,
+        deployment_status=data.get("deployment_status"),
+        cloud_run_url=data.get("cloud_run_url"),
+        cloud_run_service=data.get("cloud_run_service"),
     )
 
 
@@ -374,6 +408,72 @@ async def delete_rag_config(rag_id: str, api_key: str = Depends(get_api_key)):
 
 
 # ============================================================================
+# PROMPTS ENDPOINTS
+# ============================================================================
+
+@app.get("/prompts")
+async def list_prompts(
+    tag: Optional[str] = Query(None),
+    api_key: str = Depends(get_api_key),
+):
+    """List all prompts."""
+    prompts = await storage.list_all("prompts")
+    if tag:
+        prompts = [p for p in prompts if tag.lower() in [t.lower() for t in p.get("tags", [])]]
+    return {"prompts": prompts, "count": len(prompts)}
+
+
+@app.post("/prompts")
+async def create_prompt(prompt: PromptCreate, api_key: str = Depends(get_api_key)):
+    """Create a new prompt."""
+    prompt_id = str(uuid.uuid4())
+    now = datetime.utcnow().isoformat()
+
+    prompt_data = prompt.model_dump()
+    prompt_data["prompt_id"] = prompt_id
+    prompt_data["version"] = 1
+    prompt_data["created_at"] = now
+    prompt_data["updated_at"] = now
+
+    await storage.put("prompts", prompt_id, prompt_data)
+    return {"status": "created", "prompt_id": prompt_id, "prompt": prompt_data}
+
+
+@app.get("/prompts/{prompt_id}")
+async def get_prompt(prompt_id: str, api_key: str = Depends(get_api_key)):
+    """Get prompt by ID."""
+    prompt = await storage.get("prompts", prompt_id)
+    if not prompt:
+        raise HTTPException(status_code=404, detail="Prompt not found")
+    return prompt
+
+
+@app.put("/prompts/{prompt_id}")
+async def update_prompt(prompt_id: str, prompt: PromptCreate, api_key: str = Depends(get_api_key)):
+    """Update a prompt (auto-increments version)."""
+    existing = await storage.get("prompts", prompt_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Prompt not found")
+
+    prompt_data = prompt.model_dump()
+    prompt_data["prompt_id"] = prompt_id
+    prompt_data["version"] = existing.get("version", 1) + 1
+    prompt_data["created_at"] = existing.get("created_at")
+    prompt_data["updated_at"] = datetime.utcnow().isoformat()
+
+    await storage.put("prompts", prompt_id, prompt_data)
+    return {"status": "updated", "prompt_id": prompt_id, "version": prompt_data["version"]}
+
+
+@app.delete("/prompts/{prompt_id}")
+async def delete_prompt(prompt_id: str, api_key: str = Depends(get_api_key)):
+    """Delete a prompt."""
+    if not await storage.delete("prompts", prompt_id):
+        raise HTTPException(status_code=404, detail="Prompt not found")
+    return {"status": "deleted", "prompt_id": prompt_id}
+
+
+# ============================================================================
 # AGENTS ENDPOINTS
 # ============================================================================
 
@@ -436,6 +536,23 @@ async def create_agent(agent: AgentCreate, api_key: str = Depends(get_api_key)):
         if r:
             rag_list.append(RAGConfig(**r))
 
+    # Build runtime config if execution_type is provided
+    runtime_config = None
+    if agent.execution_type:
+        role_configs = [RoleConfig(**r) for r in agent.roles]
+        runtime_config = RuntimeConfig(
+            execution_type=agent.execution_type,
+            roles=role_configs,
+            permission_mode=agent.permission_mode,
+            chain_output=agent.chain_output,
+            parallel_roles=agent.parallel_roles,
+            aggregator_role=agent.aggregator_role,
+            coordinator_role=agent.coordinator_role,
+            worker_roles=agent.worker_roles,
+            hub_role=agent.hub_role,
+            spoke_roles=agent.spoke_roles,
+        )
+
     # Build complete agent card
     card = CompleteAgentCard(
         agent_id=agent_id,
@@ -462,6 +579,7 @@ async def create_agent(agent: AgentCreate, api_key: str = Depends(get_api_key)):
         created_at=now,
         updated_at=now,
         metadata=agent.metadata,
+        runtime_config=runtime_config,
     )
 
     await storage.put("agents", agent_id, to_dict(card))
