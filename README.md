@@ -201,6 +201,10 @@ curl -X POST http://localhost:9100/ \
 | `AGENT_ROLE` | `general` | Role name (legacy mode) |
 | `SYSTEM_PROMPT` | _(auto)_ | Inline system prompt (legacy mode) |
 
+## Roadmap
+
+- [ ] **Auto-Registration** — On startup, agent PATCHes its Cloud Run URL to Registry API and registers with LiteLLM `/v1/agents` endpoint. Public agents discoverable via `/v1/agents/{id}/make_public`. Works in both Cloud Run (`K_SERVICE` detection) and local Docker.
+
 ## Project Structure
 
 ```
