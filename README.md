@@ -60,6 +60,14 @@ docker run -d \
   -p 9100:9100 \
   cs-agent-service
 
+# Run (standalone with prompt from LiteLLM — no registry needed)
+docker run -d \
+  --name cs-agent-service \
+  --env-file .env \
+  -e PROMPT_REF=agent-researcher \
+  -p 9100:9100 \
+  cs-agent-service
+
 # Run (dynamic mode — reads config from Registry API)
 docker run -d \
   --name cs-agent-service \
@@ -199,7 +207,30 @@ curl -X POST http://localhost:9100/ \
 | `AGENT_NAME` | `reusable-agent` | Agent name (legacy mode) |
 | `AGENT_DESCRIPTION` | `A reusable agent` | Agent description (legacy mode) |
 | `AGENT_ROLE` | `general` | Role name (legacy mode) |
-| `SYSTEM_PROMPT` | _(auto)_ | Inline system prompt (legacy mode) |
+| `PROMPT_REF` | _(none)_ | Prompt name in LiteLLM — resolves system prompt from LiteLLM Prompt Management API (legacy mode) |
+| `SYSTEM_PROMPT` | _(auto)_ | Inline system prompt fallback (legacy mode, used if `PROMPT_REF` is not set or not found) |
+
+## Prompt Resolution (Legacy Mode)
+
+When running without `AGENT_ID` (no registry), the system prompt is resolved in this order:
+
+1. **`PROMPT_REF`** → Fetches prompt from LiteLLM Prompt Management API (`GET /prompts/{name}/info`)
+2. **`SYSTEM_PROMPT`** → Inline string from environment variable
+3. **`prompts/{role}.txt`** → Local file in the `prompts/` directory
+4. **Default** → Built-in fallback string
+
+This allows standalone deployment where prompts are centrally managed in LiteLLM without depending on the Registry API.
+
+```bash
+# Example: standalone agent with prompt from LiteLLM
+docker run -d \
+  --env-file .env \
+  -e PROMPT_REF=agent-researcher \
+  -e AGENT_NAME=researcher \
+  -e DEFAULT_MODEL=cs-claude-sonnet-4 \
+  -p 9100:9100 \
+  cs-agent-service
+```
 
 ## Roadmap
 

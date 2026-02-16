@@ -108,7 +108,17 @@ class AgentService:
             self._load_from_registry()
         else:
             # Legacy mode: single BaseAgent from env vars
-            agent = BaseAgent()
+            # If PROMPT_REF is set, resolve from LiteLLM first
+            prompt_ref = os.getenv("PROMPT_REF")
+            system_prompt = None
+            if prompt_ref:
+                system_prompt = self._fetch_litellm_prompt(prompt_ref, {})
+                if system_prompt:
+                    logger.info(f"Legacy mode: prompt resolved from LiteLLM via PROMPT_REF={prompt_ref}")
+                else:
+                    logger.warning(f"Legacy mode: PROMPT_REF={prompt_ref} not found in LiteLLM, falling back to env/file")
+
+            agent = BaseAgent(system_prompt=system_prompt)
             self.agents = [agent]
             self.roles_by_name = {agent.role: agent}
             self.execution_type = "single"
