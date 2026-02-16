@@ -1,0 +1,700 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>prompt_ref Flow — ConnESkills Architecture</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Outfit:wght@200;300;400;500;600;700;800&display=swap');
+
+  :root {
+    --bg-deep: #0a0a0f;
+    --bg-surface: #12121a;
+    --bg-card: #1a1a26;
+    --bg-elevated: #22222f;
+    --border-dim: #2a2a3a;
+    --border-glow: #3a3a5a;
+    --text-primary: #e8e8f0;
+    --text-secondary: #8888a0;
+    --text-dim: #555570;
+    --accent-registry: #4ecdc4;
+    --accent-registry-dim: #4ecdc420;
+    --accent-litellm: #ff6b9d;
+    --accent-litellm-dim: #ff6b9d20;
+    --accent-agent: #7c5cfc;
+    --accent-agent-dim: #7c5cfc20;
+    --accent-ref: #ffd93d;
+    --accent-ref-dim: #ffd93d15;
+    --accent-ref-glow: #ffd93d40;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg-deep);
+    color: var(--text-primary);
+    font-family: 'Outfit', sans-serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  .noise {
+    position: fixed;
+    inset: 0;
+    opacity: 0.03;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 999;
+  }
+
+  .grid-bg {
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(var(--border-dim) 1px, transparent 1px),
+      linear-gradient(90deg, var(--border-dim) 1px, transparent 1px);
+    background-size: 60px 60px;
+    opacity: 0.15;
+    pointer-events: none;
+  }
+
+  header {
+    padding: 60px 40px 40px;
+    text-align: center;
+    position: relative;
+  }
+
+  header::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 200px;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--border-glow), transparent);
+  }
+
+  .tag {
+    display: inline-block;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-bottom: 16px;
+    padding: 6px 16px;
+    border: 1px solid var(--border-dim);
+    border-radius: 100px;
+  }
+
+  h1 {
+    font-size: clamp(32px, 5vw, 56px);
+    font-weight: 800;
+    letter-spacing: -2px;
+    line-height: 1.1;
+    background: linear-gradient(135deg, var(--text-primary) 0%, var(--text-secondary) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  h1 .ref {
+    background: linear-gradient(135deg, var(--accent-ref) 0%, #ffaa00 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    font-style: italic;
+  }
+
+  .subtitle {
+    margin-top: 12px;
+    color: var(--text-secondary);
+    font-size: 16px;
+    font-weight: 300;
+    max-width: 600px;
+    margin-inline: auto;
+    line-height: 1.6;
+  }
+
+  /* Legend */
+  .legend {
+    display: flex;
+    justify-content: center;
+    gap: 32px;
+    padding: 28px 40px;
+    flex-wrap: wrap;
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    font-weight: 400;
+    color: var(--text-secondary);
+  }
+
+  .legend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .legend-dot.registry { background: var(--accent-registry); box-shadow: 0 0 8px var(--accent-registry-dim); }
+  .legend-dot.litellm { background: var(--accent-litellm); box-shadow: 0 0 8px var(--accent-litellm-dim); }
+  .legend-dot.agent { background: var(--accent-agent); box-shadow: 0 0 8px var(--accent-agent-dim); }
+  .legend-dot.ref { background: var(--accent-ref); box-shadow: 0 0 8px var(--accent-ref-glow); }
+
+  /* Phases */
+  .phases {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 20px 40px 80px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .phase {
+    position: relative;
+    border: 1px solid var(--border-dim);
+    border-radius: 16px;
+    background: var(--bg-surface);
+    overflow: hidden;
+    animation: fadeSlideIn 0.6s ease-out both;
+  }
+
+  .phase:nth-child(1) { animation-delay: 0.1s; }
+  .phase:nth-child(2) { animation-delay: 0.25s; }
+  .phase:nth-child(3) { animation-delay: 0.4s; }
+
+  @keyframes fadeSlideIn {
+    from { opacity: 0; transform: translateY(24px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .phase-header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 20px 28px;
+    border-bottom: 1px solid var(--border-dim);
+    background: var(--bg-card);
+  }
+
+  .phase-number {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    font-weight: 600;
+    width: 28px;
+    height: 28px;
+    display: grid;
+    place-items: center;
+    border-radius: 8px;
+    flex-shrink: 0;
+  }
+
+  .phase:nth-child(1) .phase-number { background: var(--accent-registry-dim); color: var(--accent-registry); border: 1px solid var(--accent-registry); }
+  .phase:nth-child(2) .phase-number { background: var(--accent-registry-dim); color: var(--accent-registry); border: 1px solid var(--accent-registry); }
+  .phase:nth-child(3) .phase-number { background: var(--accent-agent-dim); color: var(--accent-agent); border: 1px solid var(--accent-agent); }
+
+  .phase-title {
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: -0.3px;
+  }
+
+  .phase-repo {
+    margin-left: auto;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--text-dim);
+    padding: 4px 12px;
+    border: 1px solid var(--border-dim);
+    border-radius: 6px;
+    white-space: nowrap;
+  }
+
+  .phase-body {
+    padding: 28px;
+  }
+
+  /* Flow diagram inside each phase */
+  .flow {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    position: relative;
+  }
+
+  .flow-node {
+    flex: 1;
+    min-width: 0;
+    padding: 20px;
+    border-radius: 12px;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .flow-node.registry {
+    background: linear-gradient(135deg, var(--accent-registry-dim), transparent);
+    border: 1px solid #4ecdc430;
+  }
+  .flow-node.litellm {
+    background: linear-gradient(135deg, var(--accent-litellm-dim), transparent);
+    border: 1px solid #ff6b9d30;
+  }
+  .flow-node.agent-svc {
+    background: linear-gradient(135deg, var(--accent-agent-dim), transparent);
+    border: 1px solid #7c5cfc30;
+  }
+  .flow-node.inactive {
+    background: var(--bg-card);
+    border: 1px dashed var(--border-dim);
+    opacity: 0.35;
+  }
+
+  .node-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+  }
+
+  .flow-node.registry .node-label { color: var(--accent-registry); }
+  .flow-node.litellm .node-label { color: var(--accent-litellm); }
+  .flow-node.agent-svc .node-label { color: var(--accent-agent); }
+  .flow-node.inactive .node-label { color: var(--text-dim); }
+
+  .node-port {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--text-dim);
+    font-weight: 400;
+  }
+
+  .node-content {
+    font-size: 13px;
+    line-height: 1.7;
+    color: var(--text-secondary);
+  }
+
+  .node-content code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    padding: 2px 7px;
+    border-radius: 4px;
+    background: var(--bg-deep);
+    border: 1px solid var(--border-dim);
+    color: var(--text-primary);
+    white-space: nowrap;
+  }
+
+  .node-content .ref-highlight {
+    background: var(--accent-ref-dim);
+    border-color: var(--accent-ref-glow);
+    color: var(--accent-ref);
+    font-weight: 500;
+  }
+
+  .node-content .method {
+    color: var(--accent-registry);
+    font-weight: 500;
+  }
+
+  .code-block {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    line-height: 1.8;
+    background: var(--bg-deep);
+    border: 1px solid var(--border-dim);
+    border-radius: 8px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    color: var(--text-secondary);
+    margin-top: 4px;
+  }
+
+  .code-block .key { color: var(--text-dim); }
+  .code-block .str { color: #8cc8ff; }
+  .code-block .ref-val { color: var(--accent-ref); font-weight: 600; background: var(--accent-ref-dim); padding: 1px 5px; border-radius: 3px; }
+  .code-block .comment { color: var(--text-dim); font-style: italic; }
+
+  /* Arrows between nodes */
+  .flow-arrow {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    width: 80px;
+    flex-shrink: 0;
+    position: relative;
+    padding: 0 4px;
+  }
+
+  .arrow-line {
+    width: 100%;
+    height: 2px;
+    position: relative;
+  }
+
+  .arrow-line::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    border-radius: 1px;
+  }
+
+  .flow-arrow.right .arrow-line::before {
+    background: linear-gradient(90deg, var(--border-glow), var(--text-dim));
+  }
+  .flow-arrow.left .arrow-line::before {
+    background: linear-gradient(270deg, var(--border-glow), var(--text-dim));
+  }
+
+  .arrow-line::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    width: 8px;
+    height: 8px;
+    border: 2px solid var(--text-dim);
+    transform: translateY(-50%) rotate(45deg);
+  }
+
+  .flow-arrow.right .arrow-line::after {
+    right: -1px;
+    border-left: none;
+    border-bottom: none;
+  }
+
+  .flow-arrow.left .arrow-line::after {
+    left: -1px;
+    border-right: none;
+    border-top: none;
+  }
+
+  .arrow-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px;
+    color: var(--text-dim);
+    text-align: center;
+    margin-top: 8px;
+    line-height: 1.4;
+    white-space: nowrap;
+  }
+
+  /* Key insight box */
+  .insight {
+    max-width: 1100px;
+    margin: 0 auto 60px;
+    padding: 0 40px;
+    animation: fadeSlideIn 0.6s ease-out 0.55s both;
+  }
+
+  .insight-box {
+    border: 1px solid var(--accent-ref-glow);
+    border-radius: 16px;
+    padding: 28px 32px;
+    background: linear-gradient(135deg, var(--accent-ref-dim), var(--bg-surface));
+    position: relative;
+    overflow: hidden;
+  }
+
+  .insight-box::before {
+    content: '';
+    position: absolute;
+    top: -1px;
+    left: 32px;
+    width: 60px;
+    height: 3px;
+    background: var(--accent-ref);
+    border-radius: 0 0 2px 2px;
+  }
+
+  .insight-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--accent-ref);
+    margin-bottom: 12px;
+  }
+
+  .insight-text {
+    font-size: 15px;
+    line-height: 1.7;
+    color: var(--text-secondary);
+    font-weight: 300;
+  }
+
+  .insight-text strong {
+    color: var(--text-primary);
+    font-weight: 500;
+  }
+
+  .insight-text code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    padding: 2px 7px;
+    border-radius: 4px;
+    background: var(--accent-ref-dim);
+    border: 1px solid var(--accent-ref-glow);
+    color: var(--accent-ref);
+    font-weight: 500;
+  }
+
+  /* Connectors between phases */
+  .phase-connector {
+    display: flex;
+    justify-content: center;
+    padding: 4px 0;
+  }
+
+  .connector-line {
+    width: 2px;
+    height: 28px;
+    background: linear-gradient(180deg, var(--border-glow), var(--border-dim));
+    border-radius: 1px;
+    position: relative;
+  }
+
+  .connector-line::after {
+    content: '';
+    position: absolute;
+    bottom: -3px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 8px;
+    height: 8px;
+    border: 2px solid var(--text-dim);
+    border-top: none;
+    border-left: none;
+    transform: translateX(-50%) rotate(45deg);
+  }
+
+  /* Responsive */
+  @media (max-width: 800px) {
+    .flow { flex-direction: column; gap: 12px; }
+    .flow-arrow { width: auto; height: 40px; flex-direction: row; gap: 8px; }
+    .flow-arrow .arrow-line { width: 2px; height: 100%; }
+    .flow-arrow .arrow-line::before { width: 2px; height: 100%; }
+    .flow-arrow .arrow-line::after { top: auto; bottom: -1px; left: 50%; transform: translateX(-50%) rotate(45deg); border: 2px solid var(--text-dim); border-top: none; border-left: none; }
+    .flow-arrow.right .arrow-line::after, .flow-arrow.left .arrow-line::after { right: auto; left: 50%; border: 2px solid var(--text-dim); border-top: none; border-left: none; }
+    .phases { padding: 20px 16px 60px; }
+    header { padding: 40px 16px 30px; }
+    .legend { gap: 16px; padding: 20px 16px; }
+    .insight { padding: 0 16px; }
+    .phase-header { flex-wrap: wrap; gap: 10px; }
+    .phase-repo { margin-left: 0; }
+  }
+</style>
+</head>
+<body>
+
+<div class="noise"></div>
+<div class="grid-bg"></div>
+
+<header>
+  <div class="tag">Architecture Diagram</div>
+  <h1>The <span class="ref">prompt_ref</span> Flow</h1>
+  <p class="subtitle">How a single string connects Registry, LiteLLM, and Agent containers across three repos</p>
+</header>
+
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot registry"></div>cs-agent-registry-api</div>
+  <div class="legend-item"><div class="legend-dot litellm"></div>LiteLLM Proxy</div>
+  <div class="legend-item"><div class="legend-dot agent"></div>cs-agent-service</div>
+  <div class="legend-item"><div class="legend-dot ref"></div>prompt_ref value</div>
+</div>
+
+<div class="phases">
+
+  <!-- Phase 1 -->
+  <div class="phase">
+    <div class="phase-header">
+      <div class="phase-number">1</div>
+      <div class="phase-title">Create Prompt</div>
+      <div class="phase-repo">cs-agent-registry-api</div>
+    </div>
+    <div class="phase-body">
+      <div class="flow">
+        <div class="flow-node registry">
+          <div class="node-label">Registry API <span class="node-port">:9500</span></div>
+          <div class="node-content">
+            <span class="method">POST</span> <code>/prompts</code>
+          </div>
+          <div class="code-block">
+{
+  <span class="key">"name":</span> <span class="ref-val">"agent-researcher"</span>,
+  <span class="key">"template":</span> <span class="str">"You are a researcher agent..."</span>,
+  <span class="key">"tags":</span> [<span class="str">"agent"</span>, <span class="str">"researcher"</span>]
+}
+          </div>
+          <div class="node-content" style="font-size: 12px; margin-top: 4px;">
+            Saves locally <strong>+</strong> calls <code>sync_prompt_to_litellm()</code><br>
+            Uses <code class="ref-highlight">name</code> as <code>prompt_id</code> in LiteLLM
+          </div>
+        </div>
+
+        <div class="flow-arrow right">
+          <div class="arrow-line"></div>
+          <div class="arrow-label">POST /prompts<br>dotprompt format</div>
+        </div>
+
+        <div class="flow-node litellm">
+          <div class="node-label">LiteLLM <span class="node-port">litellm.conneskills.com</span></div>
+          <div class="node-content">Stores prompt with dotprompt format</div>
+          <div class="code-block">
+{
+  <span class="key">"prompt_id":</span> <span class="ref-val">"agent-researcher"</span>,
+  <span class="key">"litellm_params":</span> {
+    <span class="key">"prompt_integration":</span> <span class="str">"dotprompt"</span>,
+    <span class="key">"dotprompt_content":</span> <span class="str">"---\nname: ..."</span>
+  }
+}
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <div class="phase-connector"><div class="connector-line"></div></div>
+
+  <!-- Phase 2 -->
+  <div class="phase">
+    <div class="phase-header">
+      <div class="phase-number">2</div>
+      <div class="phase-title">Create Agent with Roles</div>
+      <div class="phase-repo">cs-agent-registry-api</div>
+    </div>
+    <div class="phase-body">
+      <div class="flow">
+        <div class="flow-node registry" style="max-width: 520px;">
+          <div class="node-label">Registry API <span class="node-port">:9500</span></div>
+          <div class="node-content">
+            <span class="method">POST</span> <code>/agents</code>
+          </div>
+          <div class="code-block">
+{
+  <span class="key">"name":</span> <span class="str">"Research Pipeline"</span>,
+  <span class="key">"execution_type":</span> <span class="str">"sequential"</span>,
+  <span class="key">"roles":</span> [
+    {
+      <span class="key">"name":</span> <span class="str">"researcher"</span>,
+      <span class="key">"prompt_ref":</span> <span class="ref-val">"agent-researcher"</span>
+    },
+    {
+      <span class="key">"name":</span> <span class="str">"analyzer"</span>,
+      <span class="key">"prompt_ref":</span> <span class="ref-val">"agent-analyzer"</span>
+    }
+  ]
+}
+          </div>
+          <div class="node-content" style="font-size: 12px; margin-top: 4px;">
+            Saves <code>runtime_config</code> with roles referencing prompts by <code class="ref-highlight">prompt_ref</code>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="phase-connector"><div class="connector-line"></div></div>
+
+  <!-- Phase 3 -->
+  <div class="phase">
+    <div class="phase-header">
+      <div class="phase-number">3</div>
+      <div class="phase-title">Agent Startup &amp; Prompt Resolution</div>
+      <div class="phase-repo">cs-agent-service</div>
+    </div>
+    <div class="phase-body">
+      <div class="flow">
+        <div class="flow-node registry">
+          <div class="node-label">Registry API <span class="node-port">:9500</span></div>
+          <div class="node-content">
+            Serves agent config with<br><code class="ref-highlight">prompt_ref</code> in each role
+          </div>
+          <div class="code-block">
+<span class="comment">← GET /agents/{AGENT_ID}</span>
+
+<span class="key">runtime_config.roles[]</span>
+  <span class="key">.prompt_ref</span> = <span class="ref-val">"agent-researcher"</span>
+          </div>
+        </div>
+
+        <div class="flow-arrow left">
+          <div class="arrow-line"></div>
+          <div class="arrow-label">GET /agents/{id}<br>reads config</div>
+        </div>
+
+        <div class="flow-node agent-svc">
+          <div class="node-label">Agent Service <span class="node-port">:9100</span></div>
+          <div class="node-content">
+            Container starts with <code>AGENT_ID</code><br>
+          </div>
+          <div class="code-block">
+<span class="comment"># src/agent.py _resolve_prompt()</span>
+<span class="key">prompt_ref</span> = <span class="ref-val">"agent-researcher"</span>
+
+<span class="comment"># 1. Try LiteLLM →</span>
+<span class="comment"># 2. Fallback: Registry</span>
+<span class="comment"># 3. Fallback: local file</span>
+<span class="comment"># 4. Default string</span>
+          </div>
+          <div class="node-content" style="font-size: 12px; margin-top: 4px;">
+            Resolves <code class="ref-highlight">prompt_ref</code> → <code>system_prompt</code><br>
+            Agent ready on A2A <code>:9100</code>
+          </div>
+        </div>
+
+        <div class="flow-arrow right">
+          <div class="arrow-line"></div>
+          <div class="arrow-label">GET /prompts/<br>{ref}/info</div>
+        </div>
+
+        <div class="flow-node litellm">
+          <div class="node-label">LiteLLM <span class="node-port">litellm.conneskills.com</span></div>
+          <div class="node-content">
+            Returns dotprompt content
+          </div>
+          <div class="code-block">
+<span class="comment">← GET /prompts/</span>
+<span class="comment">   <span class="ref-val">agent-researcher</span>/info</span>
+
+<span class="key">dotprompt_content:</span>
+  <span class="str">"---\n...\n---\n"</span>
+  <span class="str">"You are a researcher..."</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Key Insight -->
+<div class="insight">
+  <div class="insight-box">
+    <div class="insight-label">Key Insight</div>
+    <div class="insight-text">
+      <code>prompt_ref</code> is a single string — e.g. <strong>"agent-researcher"</strong> — that threads through all three systems.
+      It's the <strong>name</strong> when creating prompts in the Registry, the <strong>prompt_id</strong> stored in LiteLLM,
+      and the <strong>lookup key</strong> that cs-agent-service uses at startup to resolve each role's system prompt.
+      One string, three repos, zero coupling beyond a naming convention.
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
