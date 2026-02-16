@@ -1,0 +1,10 @@
+[default]
+agent_name = "devops-helper"
+agent_description = "DevOps helper agent for Docker, service health, logs, and LiteLLM status"
+agent_host = "0.0.0.0"
+agent_port = 9100
+# Public URL used in the agent card (how other services reach this agent)
+# Override via MCPGW_AGENT_PUBLIC_URL env var in Docker
+agent_public_url = ""
+agent_version = "1.0.0"
+max_turns = 15
