@@ -13,7 +13,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip install --no-cache-dir \
     openai \
     "a2a-sdk[http-server]>=0.3.0" \
-    httpx
+    httpx \
+    uvicorn
 
 COPY src/ /app/src/
 COPY prompts/ /app/prompts/
