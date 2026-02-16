@@ -1,0 +1,22 @@
+steps:
+- name: gcr.io/cloud-builders/docker
+  args:
+  - build
+  - -t
+  - us-central1-docker.pkg.dev/$PROJECT_ID/cs-agent-service/cs-agent-service:$COMMIT_SHA
+  - -t
+  - us-central1-docker.pkg.dev/$PROJECT_ID/cs-agent-service/cs-agent-service:latest
+  - -f
+  - Dockerfile
+  - .
+- name: gcr.io/cloud-builders/docker
+  args:
+  - push
+  - --all-tags
+  - us-central1-docker.pkg.dev/$PROJECT_ID/cs-agent-service/cs-agent-service
+images:
+- us-central1-docker.pkg.dev/$PROJECT_ID/cs-agent-service/cs-agent-service:$COMMIT_SHA
+- us-central1-docker.pkg.dev/$PROJECT_ID/cs-agent-service/cs-agent-service:latest
+options:
+  logging: CLOUD_LOGGING_ONLY
+timeout: 1200s
