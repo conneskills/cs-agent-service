@@ -117,11 +117,16 @@ class AgentService:
         """Load agent config from Registry API (sync, called at startup)."""
         import httpx
 
+        headers = {}
+        if self.litellm_api_key:
+            headers["Authorization"] = f"Bearer {self.litellm_api_key}"
+
         for attempt in range(3):
             try:
                 resp = httpx.get(
                     f"{self.registry_url}/agents/{self.agent_id}",
                     timeout=10.0,
+                    headers=headers,
                 )
                 resp.raise_for_status()
                 self.agent_data = resp.json()
