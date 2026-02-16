@@ -57,6 +57,8 @@ AGENT_ROLE=researcher SYSTEM_PROMPT="You are a researcher." python -m src
 |----------|---------|-------------|
 | `AGENT_ID` | _(none)_ | Registry agent ID — enables dynamic mode |
 | `REGISTRY_URL` | `http://registry-api:9500` | Registry API endpoint |
+| `LITELLM_URL` | `https://litellm.conneskills.com` | LiteLLM Prompt Management API |
+| `LITELLM_API_KEY` | _(none)_ | LiteLLM API key for prompt fetch |
 | `AGENT_PORT` | `9100` | A2A server port |
 | `AGENT_ROLE` | `general` | Legacy: role name |
 | `SYSTEM_PROMPT` | _(auto)_ | Legacy: inline prompt |
@@ -68,11 +70,11 @@ AGENT_ROLE=researcher SYSTEM_PROMPT="You are a researcher." python -m src
 
 ```
 cs-agent-service/
-└── reusable/
-    ├── docker/
-    │   └── Dockerfile         # Agent service image
-    ├── prompts/               # Default prompt files (fallback)
-    └── src/
-        ├── __main__.py        # A2A server entry point
-        └── agent.py           # BaseAgent + AgentService (all 5 patterns)
+├── Dockerfile          # Docker image
+├── .env.example        # Environment variables reference
+├── src/
+│   ├── __init__.py
+│   ├── __main__.py     # A2A server entry point
+│   └── agent.py        # BaseAgent + AgentService (all 5 patterns)
+└── prompts/            # Default prompt files (fallback)
 ```
