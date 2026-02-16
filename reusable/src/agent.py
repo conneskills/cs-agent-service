@@ -3,6 +3,13 @@
 Supports two modes:
 - Legacy: reads AGENT_ROLE + ALLOWED_TOOLS from env vars, prompts from local files
 - Dynamic: reads AGENT_ID from env, loads full config from Registry API (execution_type, roles, prompts)
+
+Prompt resolution order:
+1. prompt_inline (hardcoded in role config)
+2. prompt_ref → LiteLLM Prompt Management API (LITELLM_URL + LITELLM_API_KEY)
+3. prompt_ref → Registry API fallback (REGISTRY_URL)
+4. Local file (/app/prompts/{role}.txt)
+5. Default: "You are a {role} agent."
 """
 
 import os
@@ -88,6 +95,8 @@ class AgentService:
     def __init__(self):
         self.agent_id = os.getenv("AGENT_ID")
         self.registry_url = os.getenv("REGISTRY_URL", "http://registry-api:9500")
+        self.litellm_url = os.getenv("LITELLM_URL", "https://litellm.conneskills.com")
+        self.litellm_api_key = os.getenv("LITELLM_API_KEY", "")
         self.agent_data = None
         self.runtime_config = None
         self.execution_type = "single"
@@ -167,42 +176,131 @@ class AgentService:
         )
 
     def _resolve_prompt(self, role_config: dict) -> str:
-        """Resolve prompt from prompt_ref (registry) or prompt_inline."""
-        # Inline prompt takes priority
+        """Resolve prompt with fallback chain.
+
+        Order: inline → LiteLLM → Registry API → local file → default.
+        """
+        # 1. Inline prompt takes priority
         if role_config.get("prompt_inline"):
             return role_config["prompt_inline"]
 
-        # Resolve from prompt registry
         prompt_ref = role_config.get("prompt_ref")
-        if prompt_ref:
-            import httpx
-            try:
-                resp = httpx.get(
-                    f"{self.registry_url}/prompts/{prompt_ref}",
-                    timeout=10.0,
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    template = data.get("template", "")
-                    # Render variables from role metadata
-                    variables = role_config.get("metadata", {})
-                    if variables and "{" in template:
-                        try:
-                            return template.format(**variables)
-                        except KeyError:
-                            return template
-                    return template
-            except Exception as e:
-                logger.warning(f"Failed to resolve prompt_ref '{prompt_ref}': {e}")
+        variables = role_config.get("metadata", {})
 
-        # Fallback: try local file
+        if prompt_ref:
+            # 2. Try LiteLLM Prompt Management API
+            prompt = self._fetch_litellm_prompt(prompt_ref, variables)
+            if prompt:
+                return prompt
+
+            # 3. Fallback to Registry API
+            prompt = self._fetch_registry_prompt(prompt_ref, variables)
+            if prompt:
+                return prompt
+
+        # 4. Fallback: try local file
         role_name = role_config.get("name", "general")
         prompt_file = f"/app/prompts/{role_name}.txt"
         if os.path.exists(prompt_file):
             with open(prompt_file) as f:
                 return f.read()
 
+        # 5. Default
         return f"You are a {role_name} agent."
+
+    def _fetch_litellm_prompt(self, prompt_ref: str, variables: dict) -> Optional[str]:
+        """Fetch prompt from LiteLLM Prompt Management API.
+
+        Endpoint: GET /prompts/{prompt_id}/info
+        Response: { prompt_spec: { litellm_params: { dotprompt_content: "---\\n...\\n---\\n<body>" } } }
+        """
+        if not self.litellm_api_key:
+            logger.debug("LITELLM_API_KEY not set, skipping LiteLLM prompt fetch")
+            return None
+
+        import httpx
+        try:
+            resp = httpx.get(
+                f"{self.litellm_url}/prompts/{prompt_ref}/info",
+                headers={"Authorization": f"Bearer {self.litellm_api_key}"},
+                timeout=10.0,
+            )
+            if resp.status_code != 200:
+                logger.debug(f"LiteLLM prompt '{prompt_ref}' not found (HTTP {resp.status_code})")
+                return None
+
+            data = resp.json()
+            dotprompt = (
+                data.get("prompt_spec", {})
+                .get("litellm_params", {})
+                .get("dotprompt_content", "")
+            )
+            if not dotprompt:
+                return None
+
+            # Extract body after YAML frontmatter (---\n...\n---\n)
+            template = self._parse_dotprompt_body(dotprompt)
+
+            # Render variables if present
+            if variables and "{" in template:
+                try:
+                    return template.format(**variables)
+                except KeyError:
+                    return template
+
+            logger.info(f"Prompt '{prompt_ref}' loaded from LiteLLM ({len(template)} chars)")
+            return template
+
+        except Exception as e:
+            logger.warning(f"Failed to fetch LiteLLM prompt '{prompt_ref}': {e}")
+            return None
+
+    def _fetch_registry_prompt(self, prompt_ref: str, variables: dict) -> Optional[str]:
+        """Fetch prompt from Registry API (fallback)."""
+        import httpx
+        try:
+            resp = httpx.get(
+                f"{self.registry_url}/prompts/{prompt_ref}",
+                timeout=10.0,
+            )
+            if resp.status_code != 200:
+                return None
+
+            data = resp.json()
+            template = data.get("template", "")
+            if not template:
+                return None
+
+            if variables and "{" in template:
+                try:
+                    return template.format(**variables)
+                except KeyError:
+                    return template
+            return template
+
+        except Exception as e:
+            logger.warning(f"Failed to fetch registry prompt '{prompt_ref}': {e}")
+            return None
+
+    @staticmethod
+    def _parse_dotprompt_body(dotprompt_content: str) -> str:
+        """Extract body text from dotprompt format (strip YAML frontmatter)."""
+        if not dotprompt_content.startswith("---"):
+            return dotprompt_content.strip()
+
+        # Find closing --- after the opening ---
+        lines = dotprompt_content.split("\n")
+        end_idx = None
+        for i, line in enumerate(lines[1:], start=1):
+            if line.strip() == "---":
+                end_idx = i
+                break
+
+        if end_idx is not None:
+            return "\n".join(lines[end_idx + 1:]).strip()
+
+        # No closing ---, return as-is
+        return dotprompt_content.strip()
 
     def _get_role(self, role_name: str) -> Optional[BaseAgent]:
         """Get agent by role name."""
