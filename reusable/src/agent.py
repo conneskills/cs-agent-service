@@ -1,8 +1,13 @@
-"""Reusable Base Agent - A2A wrapper for Claude Agent SDK."""
+"""Reusable Base Agent - A2A wrapper for Claude Agent SDK.
+
+Supports two modes:
+- Legacy: reads AGENT_ROLE + ALLOWED_TOOLS from env vars, prompts from local files
+- Dynamic: reads AGENT_ID from env, loads full config from Registry API (execution_type, roles, prompts)
+"""
 
 import os
-import logging
 import asyncio
+import logging
 from typing import Optional
 
 from a2a.server.agent_execution import AgentExecutor, RequestContext
@@ -22,14 +27,17 @@ logger = logging.getLogger(__name__)
 
 
 class BaseAgent:
-    """Reusable agent that loads role and tools from environment."""
+    """Single-role agent that can be configured from env vars or registry."""
 
-    def __init__(self):
-        self.role = os.getenv("AGENT_ROLE", "general")
-        self.system_prompt = self._load_prompt()
-        self.max_turns = int(os.getenv("MAX_TURNS", "10"))
-        self.allowed_tools = self._parse_tools()
-        logger.info(f"Initialized agent: role={self.role}, tools={self.allowed_tools}")
+    def __init__(self, role: str = None, system_prompt: str = None,
+                 allowed_tools: list[str] = None, max_turns: int = 10,
+                 model: Optional[str] = None):
+        self.role = role or os.getenv("AGENT_ROLE", "general")
+        self.system_prompt = system_prompt or self._load_prompt()
+        self.max_turns = max_turns
+        self.allowed_tools = allowed_tools or self._parse_tools()
+        self.model = model
+        logger.info(f"BaseAgent: role={self.role}, tools={self.allowed_tools}, max_turns={self.max_turns}")
 
     def _load_prompt(self) -> str:
         """Load system prompt from file or environment."""
@@ -70,11 +78,287 @@ class BaseAgent:
         return result
 
 
-class ReusableAgentExecutor(AgentExecutor):
-    """A2A Executor that wraps the reusable BaseAgent."""
+class AgentService:
+    """Dynamic agent service that loads config from Registry API.
+
+    Supports execution types: single, sequential, parallel, coordinator, hub-spoke.
+    One container, one image — behavior determined entirely by config.
+    """
 
     def __init__(self):
-        self.agent = BaseAgent()
+        self.agent_id = os.getenv("AGENT_ID")
+        self.registry_url = os.getenv("REGISTRY_URL", "http://registry-api:9500")
+        self.agent_data = None
+        self.runtime_config = None
+        self.execution_type = "single"
+        self.agents: list[BaseAgent] = []
+        self.roles_by_name: dict[str, BaseAgent] = {}
+
+        if self.agent_id:
+            self._load_from_registry()
+        else:
+            # Legacy mode: single BaseAgent from env vars
+            agent = BaseAgent()
+            self.agents = [agent]
+            self.roles_by_name = {agent.role: agent}
+            self.execution_type = "single"
+
+    def _load_from_registry(self):
+        """Load agent config from Registry API (sync, called at startup)."""
+        import httpx
+
+        for attempt in range(3):
+            try:
+                resp = httpx.get(
+                    f"{self.registry_url}/agents/{self.agent_id}",
+                    timeout=10.0,
+                )
+                resp.raise_for_status()
+                self.agent_data = resp.json()
+                break
+            except Exception as e:
+                logger.warning(f"Registry attempt {attempt + 1}/3 failed: {e}")
+                if attempt < 2:
+                    import time
+                    time.sleep(2)
+                else:
+                    logger.error("Failed to load from registry, falling back to legacy mode")
+                    agent = BaseAgent()
+                    self.agents = [agent]
+                    self.roles_by_name = {agent.role: agent}
+                    return
+
+        self.runtime_config = self.agent_data.get("runtime_config")
+
+        if not self.runtime_config:
+            # Agent exists in registry but has no runtime_config — use legacy
+            logger.info("Agent has no runtime_config, using legacy mode")
+            agent = BaseAgent()
+            self.agents = [agent]
+            self.roles_by_name = {agent.role: agent}
+            return
+
+        self.execution_type = self.runtime_config.get("execution_type", "single")
+        roles = self.runtime_config.get("roles", [])
+
+        if not roles:
+            logger.warning("No roles in runtime_config, using legacy mode")
+            agent = BaseAgent()
+            self.agents = [agent]
+            self.roles_by_name = {agent.role: agent}
+            return
+
+        # Build BaseAgent for each role
+        for role_config in roles:
+            prompt = self._resolve_prompt(role_config)
+            agent = BaseAgent(
+                role=role_config.get("name", "agent"),
+                system_prompt=prompt,
+                allowed_tools=role_config.get("tools", ["Bash", "Read", "Grep", "Glob"]),
+                max_turns=role_config.get("max_turns", 10),
+                model=role_config.get("model"),
+            )
+            self.agents.append(agent)
+            self.roles_by_name[agent.role] = agent
+
+        logger.info(
+            f"AgentService loaded: type={self.execution_type}, "
+            f"roles={[a.role for a in self.agents]}"
+        )
+
+    def _resolve_prompt(self, role_config: dict) -> str:
+        """Resolve prompt from prompt_ref (registry) or prompt_inline."""
+        # Inline prompt takes priority
+        if role_config.get("prompt_inline"):
+            return role_config["prompt_inline"]
+
+        # Resolve from prompt registry
+        prompt_ref = role_config.get("prompt_ref")
+        if prompt_ref:
+            import httpx
+            try:
+                resp = httpx.get(
+                    f"{self.registry_url}/prompts/{prompt_ref}",
+                    timeout=10.0,
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    template = data.get("template", "")
+                    # Render variables from role metadata
+                    variables = role_config.get("metadata", {})
+                    if variables and "{" in template:
+                        try:
+                            return template.format(**variables)
+                        except KeyError:
+                            return template
+                    return template
+            except Exception as e:
+                logger.warning(f"Failed to resolve prompt_ref '{prompt_ref}': {e}")
+
+        # Fallback: try local file
+        role_name = role_config.get("name", "general")
+        prompt_file = f"/app/prompts/{role_name}.txt"
+        if os.path.exists(prompt_file):
+            with open(prompt_file) as f:
+                return f.read()
+
+        return f"You are a {role_name} agent."
+
+    def _get_role(self, role_name: str) -> Optional[BaseAgent]:
+        """Get agent by role name."""
+        return self.roles_by_name.get(role_name)
+
+    async def handle_task(self, user_message: str) -> str:
+        """Execute based on execution_type."""
+        if self.execution_type == "single":
+            return await self._run_single(user_message)
+        elif self.execution_type == "sequential":
+            return await self._run_sequential(user_message)
+        elif self.execution_type == "parallel":
+            return await self._run_parallel(user_message)
+        elif self.execution_type == "coordinator":
+            return await self._run_coordinator(user_message)
+        elif self.execution_type == "hub-spoke":
+            return await self._run_hub_spoke(user_message)
+        else:
+            logger.warning(f"Unknown execution_type '{self.execution_type}', falling back to single")
+            return await self._run_single(user_message)
+
+    async def _run_single(self, user_message: str) -> str:
+        """Single role execution."""
+        return await self.agents[0].invoke(user_message)
+
+    async def _run_sequential(self, user_message: str) -> str:
+        """Sequential pipeline: chain output from one role to the next."""
+        chain_output = self.runtime_config.get("chain_output", True) if self.runtime_config else True
+        context = user_message
+        results = []
+
+        for agent in self.agents:
+            logger.info(f"Sequential: running role '{agent.role}'")
+            result = await agent.invoke(context)
+            results.append({"role": agent.role, "result": result})
+            if chain_output:
+                context = result
+
+        # Return last result (final output of the pipeline)
+        return results[-1]["result"] if results else "No results."
+
+    async def _run_parallel(self, user_message: str) -> str:
+        """Parallel execution with optional aggregator."""
+        rc = self.runtime_config or {}
+        parallel_role_names = rc.get("parallel_roles", [])
+        aggregator_name = rc.get("aggregator_role")
+
+        # Determine which agents run in parallel
+        if parallel_role_names:
+            parallel_agents = [a for a in self.agents if a.role in parallel_role_names]
+        else:
+            # All agents except aggregator run in parallel
+            parallel_agents = [a for a in self.agents if a.role != aggregator_name]
+
+        logger.info(f"Parallel: running {[a.role for a in parallel_agents]}")
+        tasks = [a.invoke(user_message) for a in parallel_agents]
+        results = await asyncio.gather(*tasks)
+
+        # Build combined output
+        combined = "\n\n".join(
+            f"=== {agent.role} ===\n{result}"
+            for agent, result in zip(parallel_agents, results)
+        )
+
+        # If aggregator exists, pass combined results to it
+        if aggregator_name:
+            aggregator = self._get_role(aggregator_name)
+            if aggregator:
+                logger.info(f"Parallel: aggregating with role '{aggregator_name}'")
+                return await aggregator.invoke(
+                    f"Aggregate and synthesize these results:\n\n{combined}"
+                )
+
+        return combined
+
+    async def _run_coordinator(self, user_message: str) -> str:
+        """Coordinator decides which workers to invoke."""
+        rc = self.runtime_config or {}
+        coordinator_name = rc.get("coordinator_role")
+        worker_names = rc.get("worker_roles", [])
+
+        coordinator = self._get_role(coordinator_name) if coordinator_name else self.agents[0]
+        if not coordinator:
+            return await self._run_single(user_message)
+
+        # Coordinator decides which workers to use
+        worker_list = ", ".join(worker_names) if worker_names else "none defined"
+        decision_prompt = (
+            f"You are a coordinator. Available workers: [{worker_list}]. "
+            f"For this task, decide which worker(s) to use. "
+            f"Respond with ONLY the worker name(s), comma-separated.\n\n"
+            f"Task: {user_message}"
+        )
+
+        logger.info(f"Coordinator: asking '{coordinator.role}' to decide")
+        decision = await coordinator.invoke(decision_prompt)
+
+        # Parse decision and invoke selected workers
+        selected = [name.strip().lower() for name in decision.split(",")]
+        results = []
+        for name in selected:
+            worker = self._get_role(name)
+            if worker:
+                logger.info(f"Coordinator: dispatching to worker '{name}'")
+                result = await worker.invoke(user_message)
+                results.append(f"=== {name} ===\n{result}")
+
+        if not results:
+            # Fallback: coordinator handles it directly
+            logger.warning("No workers matched, coordinator handles directly")
+            return await coordinator.invoke(user_message)
+
+        # Coordinator synthesizes results
+        combined = "\n\n".join(results)
+        return await coordinator.invoke(
+            f"Synthesize these worker results into a final response:\n\n{combined}"
+        )
+
+    async def _run_hub_spoke(self, user_message: str) -> str:
+        """Hub routes to appropriate spoke(s)."""
+        rc = self.runtime_config or {}
+        hub_name = rc.get("hub_role")
+        spoke_names = rc.get("spoke_roles", [])
+
+        hub = self._get_role(hub_name) if hub_name else self.agents[0]
+        if not hub:
+            return await self._run_single(user_message)
+
+        # Hub decides which spoke to route to
+        spoke_list = ", ".join(spoke_names) if spoke_names else "none defined"
+        routing_prompt = (
+            f"You are a hub router. Available spokes: [{spoke_list}]. "
+            f"Route this request to the best spoke. "
+            f"Respond with ONLY the spoke name.\n\n"
+            f"Request: {user_message}"
+        )
+
+        logger.info(f"Hub-spoke: asking '{hub.role}' to route")
+        decision = await hub.invoke(routing_prompt)
+        spoke_name = decision.strip().lower()
+
+        spoke = self._get_role(spoke_name)
+        if spoke:
+            logger.info(f"Hub-spoke: routing to spoke '{spoke_name}'")
+            return await spoke.invoke(user_message)
+
+        # Fallback: hub handles directly
+        logger.warning(f"Spoke '{spoke_name}' not found, hub handles directly")
+        return await hub.invoke(user_message)
+
+
+class ReusableAgentExecutor(AgentExecutor):
+    """A2A Executor that wraps the AgentService."""
+
+    def __init__(self):
+        self.service = AgentService()
 
     async def execute(
         self,
@@ -91,12 +375,17 @@ class ReusableAgentExecutor(AgentExecutor):
             task = new_task(context.message)
             await event_queue.enqueue_event(task)
 
+        # Working status
+        service_desc = (
+            f"{self.service.execution_type} "
+            f"({', '.join(a.role for a in self.service.agents)})"
+        )
         await event_queue.enqueue_event(
             TaskStatusUpdateEvent(
                 status=TaskStatus(
                     state=TaskState.working,
                     message=new_agent_text_message(
-                        f"Processing as {self.agent.role}...",
+                        f"Processing [{service_desc}]...",
                         task.context_id,
                         task.id,
                     ),
@@ -108,7 +397,7 @@ class ReusableAgentExecutor(AgentExecutor):
         )
 
         try:
-            result = await self.agent.invoke(user_text)
+            result = await self.service.handle_task(user_text)
         except Exception:
             logger.exception("Agent execution failed")
             await event_queue.enqueue_event(
@@ -128,6 +417,9 @@ class ReusableAgentExecutor(AgentExecutor):
             )
             return
 
+        # Determine artifact name from service
+        name = self.service.agent_data.get("name", "agent") if self.service.agent_data else "agent"
+
         await event_queue.enqueue_event(
             TaskArtifactUpdateEvent(
                 append=False,
@@ -135,8 +427,8 @@ class ReusableAgentExecutor(AgentExecutor):
                 task_id=task.id,
                 last_chunk=True,
                 artifact=new_text_artifact(
-                    name=f"{self.agent.role}_result",
-                    description=f"Response from {self.agent.role} agent",
+                    name=f"{name}_result",
+                    description=f"Response from {name} ({self.service.execution_type})",
                     text=result,
                 ),
             )
