@@ -24,17 +24,18 @@ COPY prompts/ /app/prompts/
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 
-# ── Required ──
-# ANTHROPIC_API_KEY must be set for Claude Agent SDK to work
-# ENV ANTHROPIC_API_KEY=sk-ant-...
+# ── LiteLLM as provider gateway ──
+# Claude Agent SDK routes through LiteLLM (manages provider keys)
+# ENV ANTHROPIC_BASE_URL=https://litellm.conneskills.com
+# ENV ANTHROPIC_API_KEY=sk-...  (LiteLLM virtual key)
+
+# ── LiteLLM prompt management ──
+# ENV LITELLM_URL=https://litellm.conneskills.com
+# ENV LITELLM_API_KEY=sk-...
 
 # ── Dynamic mode (set AGENT_ID to load config from registry) ──
 # ENV AGENT_ID=
 # ENV REGISTRY_URL=http://registry-api:9500
-
-# ── LiteLLM prompt management ──
-# ENV LITELLM_URL=https://litellm.conneskills.com
-# ENV LITELLM_API_KEY=
 
 # ── Agent defaults ──
 ENV AGENT_PORT=9100
