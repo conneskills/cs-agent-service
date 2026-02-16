@@ -6,7 +6,7 @@ Dynamic Agent Runtime — one Docker image, N containers, each configured at sta
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                    Registry API (:9500)                  │
+│          cs-agent-registry-api (:9500)                  │
 │  POST /agents      → Create agent config                │
 │  POST /prompts     → Create reusable prompts            │
 │  GET  /agents/{id} → Container reads config at startup  │
@@ -24,6 +24,10 @@ Dynamic Agent Runtime — one Docker image, N containers, each configured at sta
 
 **Key concept:** All containers use the same image. Behavior is determined by `AGENT_ID` → Registry API returns `runtime_config` with execution type, roles, prompts, and tools.
 
+## Related Repos
+
+- **[cs-agent-registry-api](https://github.com/conneskills/cs-agent-registry-api)** — Agent/prompt/skill CRUD and config storage
+
 ## Execution Types
 
 | Type | Description |
@@ -34,52 +38,20 @@ Dynamic Agent Runtime — one Docker image, N containers, each configured at sta
 | `coordinator` | Coordinator decides which workers to invoke |
 | `hub-spoke` | Hub routes requests to specialized spokes |
 
-## Components
-
-| Component | Port | Description |
-|-----------|------|-------------|
-| **Registry API** | 9500 | Agent/prompt CRUD, config storage |
-| **Agent Service** | 9100 | Generic runtime, loads config from Registry via AGENT_ID |
-
 ## Quick Start
 
 ```bash
-# 1. Start Registry API
-cd registry_api && pip install aiohttp httpx && uvicorn main:app --port 9500
+# 1. Start Registry API (separate repo)
+# See: https://github.com/conneskills/cs-agent-registry-api
 
-# 2. Create a prompt
-curl -X POST http://localhost:9500/prompts \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "researcher",
-    "template": "You are a research agent specialized in {domain}.",
-    "version": "1.0"
-  }'
+# 2. Run agent container (dynamic mode)
+AGENT_ID=<id> REGISTRY_URL=http://localhost:9500 python -m src
 
-# 3. Create an agent with runtime config
-curl -X POST http://localhost:9500/agents \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "Research Pipeline",
-    "description": "Sequential researcher → analyzer",
-    "url": "",
-    "execution_type": "sequential",
-    "roles": [
-      {"name": "researcher", "prompt_ref": "researcher", "tools": ["Bash","Read","WebSearch"]},
-      {"name": "analyzer", "prompt_inline": "You analyze research results.", "tools": ["Bash","Read"]}
-    ]
-  }'
-
-# 4. Run agent container (dynamic mode)
-cd reusable && AGENT_ID=<id> REGISTRY_URL=http://localhost:9500 python -m src
-
-# 5. Or legacy mode (no registry)
-cd reusable && AGENT_ROLE=researcher SYSTEM_PROMPT="You are a researcher." python -m src
+# 3. Or legacy mode (no registry needed)
+AGENT_ROLE=researcher SYSTEM_PROMPT="You are a researcher." python -m src
 ```
 
 ## Environment Variables
-
-### Agent Container
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -92,27 +64,10 @@ cd reusable && AGENT_ROLE=researcher SYSTEM_PROMPT="You are a researcher." pytho
 | `PERMISSION_MODE` | `bypassPermissions` | Claude Agent SDK permission mode |
 | `WORKDIR` | `/app` | Working directory for agent |
 
-### Registry API
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | _(none)_ | Phoenix/OTLP endpoint (optional) |
-
-## Tracing (Optional)
-
-If `OTEL_EXPORTER_OTLP_ENDPOINT` is set and `opentelemetry` packages are installed, spans are sent to Phoenix/OTLP. Otherwise, tracing degrades gracefully to no-op — no crash, no dependency required.
-
 ## Project Structure
 
 ```
 cs-agent-service/
-├── models/
-│   └── capabilities.py       # Data models: RuntimeConfig, ExecutionType, AgentCard
-├── registry_api/
-│   ├── Dockerfile             # Registry API image
-│   ├── main.py                # FastAPI: agents, prompts, skills, tools CRUD
-│   ├── storage.py             # JSON file storage
-│   └── tracing.py             # Optional OpenTelemetry (graceful no-op)
 └── reusable/
     ├── docker/
     │   └── Dockerfile         # Agent service image
