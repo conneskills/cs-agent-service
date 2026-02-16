@@ -1,8 +1,11 @@
-"""Reusable Base Agent - A2A wrapper for Claude Agent SDK.
+"""Reusable Base Agent - A2A wrapper using OpenAI SDK via LiteLLM proxy.
+
+LiteLLM manages provider keys and routing. The agent only needs
+LITELLM_URL + LITELLM_API_KEY — no provider API keys in containers.
 
 Supports two modes:
-- Legacy: reads AGENT_ROLE + ALLOWED_TOOLS from env vars, prompts from local files
-- Dynamic: reads AGENT_ID from env, loads full config from Registry API (execution_type, roles, prompts)
+- Legacy: reads AGENT_ROLE + SYSTEM_PROMPT from env vars, prompts from local files
+- Dynamic: reads AGENT_ID from env, loads full config from Registry API
 
 Prompt resolution order:
 1. prompt_inline (hardcoded in role config)
@@ -17,6 +20,8 @@ import asyncio
 import logging
 from typing import Optional
 
+from openai import AsyncOpenAI
+
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from a2a.types import (
@@ -27,24 +32,30 @@ from a2a.types import (
 )
 from a2a.utils import new_agent_text_message, new_task, new_text_artifact
 
-from claude_agent_sdk import query, AssistantMessage, ClaudeAgentOptions, TextBlock
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# LiteLLM as OpenAI-compatible proxy
+_litellm_url = os.getenv("LITELLM_URL", "https://litellm.conneskills.com")
+_litellm_key = os.getenv("LITELLM_API_KEY", "")
+_default_model = os.getenv("DEFAULT_MODEL", "gpt-4o-mini")
+
+_client = AsyncOpenAI(
+    base_url=_litellm_url,
+    api_key=_litellm_key,
+)
+
 
 class BaseAgent:
-    """Single-role agent that can be configured from env vars or registry."""
+    """Single-role agent that calls LiteLLM via OpenAI SDK."""
 
     def __init__(self, role: str = None, system_prompt: str = None,
-                 allowed_tools: list[str] = None, max_turns: int = 10,
-                 model: Optional[str] = None):
+                 max_turns: int = 10, model: Optional[str] = None):
         self.role = role or os.getenv("AGENT_ROLE", "general")
         self.system_prompt = system_prompt or self._load_prompt()
         self.max_turns = max_turns
-        self.allowed_tools = allowed_tools or self._parse_tools()
-        self.model = model
-        logger.info(f"BaseAgent: role={self.role}, tools={self.allowed_tools}, max_turns={self.max_turns}")
+        self.model = model or _default_model
+        logger.info(f"BaseAgent: role={self.role}, model={self.model}, max_turns={self.max_turns}")
 
     def _load_prompt(self) -> str:
         """Load system prompt from file or environment."""
@@ -54,35 +65,25 @@ class BaseAgent:
                 return f.read()
         return os.getenv("SYSTEM_PROMPT", f"You are a {self.role} agent.")
 
-    def _parse_tools(self) -> list[str]:
-        """Parse allowed tools from comma-separated env var."""
-        tools_env = os.getenv("ALLOWED_TOOLS", "Bash,Read,Grep,Glob")
-        return [t.strip() for t in tools_env.split(",")]
-
     async def invoke(self, user_message: str) -> str:
-        """Execute the agent with user message."""
-        options = ClaudeAgentOptions(
-            system_prompt=self.system_prompt,
-            allowed_tools=self.allowed_tools,
-            max_turns=self.max_turns,
-            permission_mode=os.getenv("PERMISSION_MODE", "bypassPermissions"),
-            cwd=os.getenv("WORKDIR", "/app"),
-        )
+        """Execute the agent via LiteLLM (OpenAI-compatible)."""
+        messages = [
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": user_message},
+        ]
 
-        result_parts = []
         try:
-            async for message in query(prompt=user_message, options=options):
-                if isinstance(message, AssistantMessage):
-                    for block in message.content:
-                        if isinstance(block, TextBlock):
-                            result_parts.append(block.text)
+            response = await _client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                max_tokens=4096,
+            )
+            result = response.choices[0].message.content or ""
+            logger.info(f"Agent '{self.role}' completed: {len(result)} chars")
+            return result
         except Exception as e:
             logger.exception("Agent invocation failed")
             return f"Error: {str(e)}"
-
-        result = "\n".join(result_parts) if result_parts else "No response generated."
-        logger.info(f"Agent '{self.role}' completed: {len(result)} chars")
-        return result
 
 
 class AgentService:
@@ -163,7 +164,6 @@ class AgentService:
             agent = BaseAgent(
                 role=role_config.get("name", "agent"),
                 system_prompt=prompt,
-                allowed_tools=role_config.get("tools", ["Bash", "Read", "Grep", "Glob"]),
                 max_turns=role_config.get("max_turns", 10),
                 model=role_config.get("model"),
             )
