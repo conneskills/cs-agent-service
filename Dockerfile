@@ -14,7 +14,8 @@ RUN pip install --no-cache-dir \
     openai \
     "a2a-sdk[http-server]>=0.3.0" \
     httpx \
-    uvicorn
+    uvicorn \
+    google-adk
 
 COPY src/ /app/src/
 COPY prompts/ /app/prompts/

@@ -15,6 +15,15 @@ Prompt resolution order:
 5. Default: "You are a {role} agent."
 """
 
+# Deprecation warning: this module is superseded by ADK-based executor path
+import warnings
+warnings.warn(
+    "src.agent.py is deprecated and will be removed in a future release. "
+    "Use src.agent_factory and src.agent_executor with Google ADK migration.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 import os
 import asyncio
 import logging
@@ -562,3 +571,18 @@ class ReusableAgentExecutor(AgentExecutor):
         event_queue: EventQueue,
     ) -> None:
         raise NotImplementedError("Cancel not supported")
+# Phoenix initialization (optional)
+try:
+    from config import get_phoenix_config
+    phoenix_cfg = None
+    try:
+        phoenix_cfg = get_phoenix_config()
+    except Exception:
+        phoenix_cfg = None
+    if phoenix_cfg:
+        from phoenix_client import PhoenixClient
+        PHOENIX_CLIENT = PhoenixClient(phoenix_cfg["endpoint"], phoenix_cfg["api_key"])
+    else:
+        PHOENIX_CLIENT = None
+except Exception:
+    PHOENIX_CLIENT = None

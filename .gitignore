@@ -11,3 +11,15 @@ venv/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
+
+# alma-code-search local index
+.indexes/
+
+# Alma Coder planning files (set features.commit_docs=true to commit)
+.planning/
+.claude
+.opencode
+.shared
+.serena
+bin
+.gemini 

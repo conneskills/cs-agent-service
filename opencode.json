@@ -1,0 +1,59 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "context7": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "@upstash/context7-mcp@latest"
+      ]
+    },
+    "alma-code-search": {
+      "type": "local",
+      "command": [
+        "uvx",
+        "alma-code-search"
+      ]
+    },
+    "serena": {
+      "type": "local",
+      "command": [
+        "uvx",
+        "--from",
+        "git+https://github.com/oraios/serena",
+        "serena",
+        "start-mcp-server",
+        "--context",
+        "claude-code",
+        "--project-from-cwd"
+      ]
+    }
+  },
+  "permission": {
+    "read": {
+      ".shared/*": "allow",
+      ".opencode/*": "allow",
+      "bin/alma-tools.js": "allow"
+    },
+    "edit": {
+      ".shared/*": "allow",
+      ".opencode/*": "allow",
+      "bin/alma-tools.js": "allow"
+    },
+    "bash": "ask",
+    "glob": {
+      ".shared/*": "allow",
+      ".opencode/*": "allow",
+      "bin/alma-tools.js": "allow"
+    },
+    "grep": {
+      ".shared/*": "allow",
+      ".opencode/*": "allow",
+      "bin/alma-tools.js": "allow"
+    },
+    "webfetch": "allow",
+    "task": "allow",
+    "skill": "allow"
+  }
+}

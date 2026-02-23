@@ -9,18 +9,21 @@ from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.tasks import InMemoryTaskStore
 from a2a.types import AgentCard, AgentCapabilities, AgentSkill
 
-from src.agent import ReusableAgentExecutor
+# ADK migration: use ADKAgentExecutor wrapper instead of ReusableAgentExecutor
+from src.agent_executor import ADKAgentExecutor
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
 def main():
-    agent_executor = ReusableAgentExecutor()
-    service = agent_executor.service
+    # Initialize the ADK-based executor
+    agent_executor = ADKAgentExecutor()
+    # The ADK path may not expose legacy service data; fall back to env vars.
+    service = getattr(agent_executor, "service", None)
 
     # Read name/description from registry data if available
-    if service.agent_data:
+    if service is not None and getattr(service, "agent_data", None):
         agent_name = service.agent_data.get("name", "dynamic-agent").lower().replace(" ", "-")
         agent_description = service.agent_data.get("description", "A dynamic agent service")
     else:
@@ -59,7 +62,8 @@ def main():
 
     logger.info(
         f"Starting A2A server: {agent_name} on port {port} "
-        f"[{service.execution_type}, roles: {[a.role for a in service.agents]}]"
+        + (f"[execution_type={getattr(service, 'execution_type', 'single')}, roles: {[a.role for a in getattr(service, 'agents', [])]}]" \
+           if service is not None else "")
     )
 
     uvicorn.run(app.build(), host="0.0.0.0", port=port)
