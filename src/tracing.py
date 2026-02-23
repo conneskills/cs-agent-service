@@ -14,21 +14,26 @@ try:
     from opentelemetry import trace
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
     # Try grpc exporter first, fall back to http if not available
+    _USING_GRPC_EXPORTER = False
     try:
         from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
             OTLPSpanExporter as OTLPSpanExporterGrpc,
         )
         OTLPSpanExporter = OTLPSpanExporterGrpc
+        _USING_GRPC_EXPORTER = True
     except Exception:
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
             OTLPSpanExporter as OTLPSpanExporterHttp,
         )
         OTLPSpanExporter = OTLPSpanExporterHttp
+        _USING_GRPC_EXPORTER = False
 
     OTEL_AVAILABLE = True
 except Exception:
     OTEL_AVAILABLE = False
+    _USING_GRPC_EXPORTER = False
     trace = None
 
 
@@ -56,7 +61,11 @@ class TracerManager:
 
         try:
             provider = TracerProvider()
-            exporter = OTLPSpanExporter(endpoint=endpoint, insecure=True)
+            # insecure=True is only valid for the gRPC exporter
+            exporter_kwargs = {"endpoint": endpoint}
+            if _USING_GRPC_EXPORTER:
+                exporter_kwargs["insecure"] = True
+            exporter = OTLPSpanExporter(**exporter_kwargs)
             processor = BatchSpanProcessor(exporter)
             provider.add_span_processor(processor)
             trace.set_tracer_provider(provider)

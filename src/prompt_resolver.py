@@ -3,6 +3,7 @@ import os
 import asyncio
 import logging
 import contextlib
+import concurrent.futures
 from .tracing import TracerManager
 
 # Public API surface for tests and runtime
@@ -22,6 +23,23 @@ try:
     from src.config import get_phoenix_config as _get_phoenix_config  # type: ignore
 except Exception:  # pragma: no cover
     _get_phoenix_config = lambda: None  # type: ignore
+
+
+def _run_async(coro):
+    """Run an async coroutine from sync code, handling an already-running loop."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop is None:
+        # No loop running — safe to use asyncio.run()
+        return asyncio.run(coro)
+
+    # A loop is already running (e.g. FastAPI/uvicorn).
+    # Execute the coroutine in a separate thread with its own event loop.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, coro).result(timeout=5)
 
 
 def _default_prompt(role_config: Dict[str, Any]) -> str:
@@ -103,9 +121,9 @@ def resolve_prompt(role_config: Dict[str, Any], prompts: Dict[str, str]) -> str:
         if span:
             span.set_attribute("role.name", role_name or "unknown")
 
-        # 1) Try Phoenix (async, but exposed here as a sync wrapper for tests)
+        # 1) Try Phoenix (async client, called from sync context)
         try:
-            prompt = asyncio.run(_try_phoenix_prompt(role_config))  # type: ignore
+            prompt = _run_async(_try_phoenix_prompt(role_config))
             if prompt:
                 source = f"Phoenix ({role_config.get('phoenix_prompt_id', role_name)})"
                 logger.info("Prompt source: %s", source)

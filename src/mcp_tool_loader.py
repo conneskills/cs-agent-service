@@ -190,24 +190,3 @@ except Exception:
     _HAS_GOOGLE_ADK = False
 
 __all__ = ["MCPToolLoader"]
-
-# Placeholder for integration point
-try:
-    # Example hypothetical integration with google-adk if present
-    from google import adk  # type: ignore
-    _HAS_GOOGLE_ADK = True
-except Exception:
-    adk = None  # type: ignore
-    _HAS_GOOGLE_ADK = False
-
-
-def _integrate_with_google_adk(loader: MCPToolLoader) -> List[object]:
-    if not _HAS_GOOGLE_ADK:
-        return []
-    # This is a placeholder demonstrating how integration would look
-    # tools = adk.MCPToolset().load_tools(servers=...)
-    # return tools
-    return []
-
-
-__all__ = ["MCPToolLoader"]

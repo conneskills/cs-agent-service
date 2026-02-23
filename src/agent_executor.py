@@ -9,6 +9,7 @@ so it can be plugged into the DefaultRequestHandler used by the A2A server.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Optional
 import contextlib
 
@@ -21,7 +22,6 @@ except ImportError:
 
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
-from a2a.server.tasks import InMemoryTaskStore
 from a2a.types import (
     TaskArtifactUpdateEvent,
     TaskState,
@@ -49,23 +49,21 @@ class ADKAgentExecutor(AgentExecutor):
         self._runner = None  # type: ignore
         self._agent = None
         self.factory = None  # type: ignore
-        self.service = None  # optional legacy service for backward-compat
+        self.agent_data = None
 
         # Attempt to build the ADK-backed agent using the existing runtime
-        # configuration if available. We avoid hard dependencies during import.
-        try:
-            # Lightweight: reuse legacy AgentService to fetch config if available
-            from src.agent import AgentService  # type: ignore
+        # configuration if available.
+        agent_id = os.getenv("AGENT_ID")
+        runtime_config = {}
+        if agent_id:
+            from src.utils.registry import fetch_agent_config
+            self.agent_data = fetch_agent_config(agent_id)
+            if self.agent_data:
+                runtime_config = self.agent_data.get("runtime_config") or {}
 
-            self.service = AgentService()
-            runtime_config = self.service.runtime_config or {}
-            # Prompts are resolved by the runtime config itself; empty mapping is fine
-            self.factory = AgentFactory(runtime_config, {})
-            self._agent = self.factory.build()
-        except Exception:
-            # Fallback: build a minimal single-agent using runtime_config from env
-            self.factory = AgentFactory({}, {})
-            self._agent = self.factory.build()
+        # Build agent using factory
+        self.factory = AgentFactory(runtime_config, {})
+        self._agent = self.factory.build()
 
         # Try to initialize ADK Runner if the package is available
         try:
@@ -164,7 +162,7 @@ class ADKAgentExecutor(AgentExecutor):
                 )
                 return
 
-        name = getattr(self.service.agent_data, "get", lambda *a, **k: None)("name", "agent") if self.service and getattr(self.service, "agent_data", None) else "agent"
+        name = self.agent_data.get("name", "agent") if self.agent_data else "agent"
 
         await event_queue.enqueue_event(
             TaskArtifactUpdateEvent(
