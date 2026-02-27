@@ -12,13 +12,14 @@ import warnings
 # Attempt to import real ADK classes; fall back to lightweight stubs if unavailable
 try:
     from google.adk.agents import LlmAgent, BaseAgent, SequentialAgent, ParallelAgent, LoopAgent  # type: ignore
-    from google.adk.tools import FunctionTool  # type: ignore
+    from google.adk.tools import FunctionTool, agent_tool  # type: ignore
     HAVE_ADK = True
 except Exception:
     HAVE_ADK = False
 
     class BaseAgent:
-        pass
+        async def _run_async_impl(self, ctx):
+            return ""
 
     class LlmAgent(BaseAgent):
         def __init__(self, name: str, model: str, instruction: str, tools: Optional[List[Any]] = None):
@@ -34,6 +35,12 @@ except Exception:
         def __init__(self, name: str, fn: Any = None):
             self.name = name
             self.fn = fn
+
+    class agent_tool:
+        class AgentTool:
+            def __init__(self, agent: BaseAgent):
+                self.agent = agent
+                self.name = getattr(agent, "name", "agent_tool")
 
     # Expose a consistent interface for downstream code/tests
 
@@ -62,6 +69,52 @@ except Exception:
 
         def __repr__(self) -> str:
             return f"LoopAgent(name={self.name}, iterations={self.max_iterations})"
+
+
+class ComplexityAssessor:
+    """Assess task complexity using simple heuristics."""
+
+    def assess(self, user_input: str) -> str:
+        text = user_input.lower()
+        word_count = len(text.split())
+
+        # Simple heuristics for complexity assessment
+        is_complex = any(kw in text for kw in ["analyze", "compare", "evaluate", "design", "architect"])
+        is_moderate = any(kw in text for kw in ["implement", "debug", "refactor", "create"])
+
+        if word_count > 50 or is_complex:
+            return "complex"
+        if word_count > 20 or is_moderate:
+            return "moderate"
+        return "simple"
+
+
+class HybridOrchestrator(BaseAgent):
+    """Orchestrates between SLM and LLM based on task complexity."""
+
+    def __init__(self, name: str, slm_agent: BaseAgent, llm_agent: BaseAgent):
+        self.name = name
+        self.slm_agent = slm_agent
+        self.llm_agent = llm_agent
+        self.assessor = ComplexityAssessor()
+
+    async def _run_async_impl(self, ctx):
+        user_input = ctx.state.get("current_task", "")
+        complexity = self.assessor.assess(user_input)
+
+        if complexity == "simple":
+            # Route to SLM (Fast, Low Cost)
+            invoke = getattr(self.slm_agent, "invoke", None) or getattr(self.slm_agent, "_run_async_impl", None)
+        else:
+            # Route to LLM (Powerful, High Cost)
+            invoke = getattr(self.llm_agent, "invoke", None) or getattr(self.llm_agent, "_run_async_impl", None)
+
+        if callable(invoke):
+            import asyncio
+            if asyncio.iscoroutinefunction(invoke):
+                return await invoke(ctx)
+            return invoke(ctx)
+        return ""
 
 
 def _load_tools(role_config: dict) -> List[FunctionTool]:
@@ -152,6 +205,12 @@ class AgentFactory:
             return self._build_parallel(self.runtime_config.get("roles", []), self.resolved_prompts, self.runtime_config)
         if execution_type == "loop":
             return self._build_loop(self.runtime_config.get("roles", []), self.resolved_prompts, self.runtime_config)
+        if execution_type == "coordinator":
+            return self._build_coordinator(self.runtime_config.get("roles", []), self.resolved_prompts, self.runtime_config)
+        if execution_type == "hub-spoke":
+            return self._build_hub_spoke(self.runtime_config.get("roles", []), self.resolved_prompts, self.runtime_config)
+        if execution_type == "hybrid":
+            return self._build_hybrid(self.runtime_config.get("roles", []), self.resolved_prompts, self.runtime_config)
 
         # Fallback to single execution for any other mode in this phase
         return _build_llm_agent(self.runtime_config, self.resolved_prompts, self._tools)
@@ -181,3 +240,37 @@ class AgentFactory:
         sub_agents = [_build_llm_agent(r, prompts, self._tools) for r in roles]
         max_iters = config.get("max_iterations", 5)
         return LoopAgent(name="refiner", sub_agents=sub_agents, max_iterations=max_iters)
+
+    def _build_coordinator(self, roles: List[dict], prompts: Dict[str, str], config: dict) -> BaseAgent:
+        coordinator_role = config.get("coordinator_role")
+        workers = [_build_llm_agent(r, prompts, self._tools) for r in roles if r.get("name") != coordinator_role]
+        
+        coord_config = next((r for r in roles if r.get("name") == coordinator_role), roles[0])
+        coordinator = _build_llm_agent(coord_config, prompts, self._tools)
+        
+        # Add workers as tools to the coordinator
+        if hasattr(coordinator, "tools"):
+            coordinator.tools.extend([agent_tool.AgentTool(agent=w) for w in workers])
+        return coordinator
+
+    def _build_hub_spoke(self, roles: List[dict], prompts: Dict[str, str], config: dict) -> BaseAgent:
+        hub_role = config.get("hub_role")
+        spokes = [_build_llm_agent(r, prompts, self._tools) for r in roles if r.get("name") != hub_role]
+        
+        hub_config = next((r for r in roles if r.get("name") == hub_role), roles[0])
+        hub = _build_llm_agent(hub_config, prompts, self._tools)
+        
+        # Add spokes as tools to the hub
+        if hasattr(hub, "tools"):
+            hub.tools.extend([agent_tool.AgentTool(agent=s) for s in spokes])
+        return hub
+
+    def _build_hybrid(self, roles: List[dict], prompts: Dict[str, str], config: dict) -> BaseAgent:
+        # Expects exactly two roles: the first for SLM, the second for LLM
+        if len(roles) < 2:
+            return _build_llm_agent(roles[0] if roles else {}, prompts, self._tools)
+            
+        slm_agent = _build_llm_agent(roles[0], prompts, self._tools)
+        llm_agent = _build_llm_agent(roles[1], prompts, self._tools)
+        
+        return HybridOrchestrator(name="hybrid_orchestrator", slm_agent=slm_agent, llm_agent=llm_agent)

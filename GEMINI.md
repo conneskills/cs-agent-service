@@ -28,7 +28,7 @@ All platform-agnostic files live in `.shared/`. Platform directories use symlink
 │   └── references/            # Knowledge base (patterns, guidelines, checklists)
 └── agents/                    # 12 specialized agents
 
-.gemini/commands/ac/           # 6 slash commands (/ac:*)
+.gemini/commands/ac/           # 6 slash commands (/ac-*)
 .planning/                     # Generated project state (NOT in repo)
 ├── PROJECT.md, ROADMAP.md, STATE.md
 ├── phases/                    # Phase plans and summaries
@@ -72,7 +72,7 @@ Zero-dependency Node.js CLI (`bin/alma-tools.js`) providing deterministic operat
 
 **Usage in workflows:** `**Primary:** node bin/alma-tools.js <command>` with `**Fallback:**` manual bash parsing when alma-tools.js unavailable.
 
-### `/ac:go` Smart Router
+### `/ac-go` Smart Router
 
 Main entry point. LLM classifies natural language to one of **36 intents**, then `alma-tools.js route dispatch` handles deterministic routing (handler selection, memory pre-fetch, agent delegation). Modularized: `go.md` → `go-router.md` → `go-handlers*.md` (context: ~15% total, down from 30%).
 
@@ -80,20 +80,20 @@ Main entry point. LLM classifies natural language to one of **36 intents**, then
 
 Skip LLM intent classification — ~73% less context overhead. Use when you KNOW what you want:
 
-`/ac:fix`, `/ac:new`, `/ac:plan`, `/ac:verify`, `/ac:execute`, `/ac:research`, `/ac:investigate`, `/ac:status`
+`/ac-fix`, `/ac-new`, `/ac-plan`, `/ac-verify`, `/ac-execute`, `/ac-research`, `/ac-investigate`, `/ac-status`
 
-Each dispatches with a predetermined intent via `enforce-dedicated-commands.js` hook. `/ac:go` remains the universal fallback for all 36 intents + ambiguous input.
+Each dispatches with a predetermined intent via `enforce-dedicated-commands.js` hook. `/ac-go` remains the universal fallback for all 36 intents + ambiguous input.
 
 ### Other Commands
 
-- `/ac:jira [ISSUE-KEY]` — Jira issue analysis with full hierarchy → `.planning/jira/JIRA-CONTEXT-[KEY].md`
-- `/ac:code-review [target]` — Delegates to native /review + cross-language anti-pattern detection
+- `/ac-jira [ISSUE-KEY]` — Jira issue analysis with full hierarchy → `.planning/jira/JIRA-CONTEXT-[KEY].md`
+- `/ac-code-review [target]` — Delegates to native /review + cross-language anti-pattern detection
 
 ### UAT Pipeline (verify → diagnose → fix)
 
 Full closed-loop testing: `verify-work.md` creates persistent UAT.md per phase, guides manual testing with auto-severity inference (P0-P3), spawns parallel debug agents via `diagnose-issues.md` for failures, and feeds diagnosed gaps into `plan-fix` or `plan-milestone-gaps` for automated remediation.
 
-Flow: `/ac:verify-work` → UAT.md + ISSUES.md → `/ac:diagnose-issues` → DIAGNOSIS.md → `/ac:plan-fix` → FIX.md → execute
+Flow: `/ac-verify-work` → UAT.md + ISSUES.md → `/ac-diagnose-issues` → DIAGNOSIS.md → `/ac-plan-fix` → FIX.md → execute
 
 ### Phase System (Critical)
 
@@ -117,6 +117,15 @@ key_files:
 Never flat lists. Tiers: Hot (INDEX, STATE) → Warm (chapters) → Cold (plans) → Archive.
 
 Memory operations are deterministic via `alma-tools.js memory` commands (10 subcommands). Workflows auto-invoke these — developers never call them directly.
+
+## Testing & TDD (Quality Gates)
+
+Alma Coder uses a **Pragmatic TDD** approach.
+
+- **Mandatory TDD:** For plans with `type: tdd` (Business logic, APIs, Algorithms).
+- **Cycle:** RED (failing test) → GREEN (passing code) → REFACTOR (cleanup).
+- **Standard Flow:** For UI/Config, add tests during or after implementation.
+- **Always Verify:** No task is complete until `verify` command passes.
 
 ## Naming Conventions
 
@@ -151,7 +160,7 @@ Types: feat, fix, refactor, test, docs, chore
 
 **Serena memory coexistence:** Serena has its own `.serena/memories/` directory. Use workflow memory (`.planning/memory/chapters/`) for architectural decisions. Use Serena memory for Serena-specific state (onboarding, LSP config). Do not duplicate.
 
-Config: `.mcp.json` (Claude Code), `.cursor/mcp.json` (Cursor). Guide: `@.shared/workflows/references/mcp-integration-guide.md`
+Config: `.mcp.json` (Claude Code), `.cursor/mcp.json` (Cursor). Guide: `@.gemini/workflows/references/mcp-integration-guide.md`
 
 ## Hooks
 
@@ -162,7 +171,7 @@ Build before publishing: `npm run build:hooks`
 
 ## For More Context
 
-- `@.shared/workflows/REFERENCE-MAP.md` — File organization
-- `@.shared/workflows/WORKFLOWS-INDEX.md` — Workflow documentation
-- `@.shared/agents/README.md` — Agent definitions
-- `@.shared/workflows/references/mcp-integration-guide.md` — MCP guide
+- `@.gemini/workflows/REFERENCE-MAP.md` — File organization
+- `@.gemini/workflows/WORKFLOWS-INDEX.md` — Workflow documentation
+- `@.gemini/agents/README.md` — Agent definitions
+- `@.gemini/workflows/references/mcp-integration-guide.md` — MCP guide
