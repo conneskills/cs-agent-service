@@ -24,12 +24,22 @@ class DummyEventQueue:
 
 @pytest.mark.asyncio
 async def test_adk_executor_runs_with_runner(monkeypatch):
-    # Patch ADK Runner to return a deterministic value
     class FakeRunner:
-        async def run(self, input_text):
-            return f"ADK_RESULT:{input_text}"
-
-    with patch("google.adk.runners.Runner", return_value=FakeRunner()):
+        async def run(self, user_id=None, session_id=None, new_message=None, run_config=None, metadata=None):
+            class DummyMessage:
+                parts = []
+            class DummyEvent:
+                def __init__(self, text):
+                    class Part:
+                        def __init__(self, text):
+                            self.text = text
+                    class Msg:
+                        def __init__(self, text):
+                            self.parts = [Part(text)]
+                    self.message = Msg(text)
+            
+            # Since ADK 1.1.1 run() returns an async generator:
+            yield DummyEvent(f"ADK_RESULT:{new_message.parts[0].text if hasattr(new_message, 'parts') else new_message}")
         executor = ADKAgentExecutor()
         ctx = DummyContext("test input")
         ev = DummyEventQueue()

@@ -67,11 +67,19 @@ class ADKAgentExecutor(AgentExecutor):
         # Try to initialize ADK Runner if the package is available
         try:
             from google.adk.runners import Runner as ADKRunner  # type: ignore
+            from google.adk.sessions import InMemorySessionService
 
             self._runner_class = ADKRunner
+            self._session_service = InMemorySessionService()
+
             # Instantiate runner with the built ADK agent
-            self._runner = ADKRunner(agent=self._agent)  # type: ignore
-        except Exception:
+            self._runner = ADKRunner(
+                app_name="cs-agent-service",
+                agent=self._agent,
+                session_service=self._session_service
+            )  # type: ignore
+        except Exception as e:
+            logger.warning(f"Failed to initialize ADK runner, falling back. Error: {e}")
             self._runner = None
             self._runner_class = None  # type: ignore
 
@@ -124,8 +132,36 @@ class ADKAgentExecutor(AgentExecutor):
 
             try:
                 if self._runner is not None:
-                    # ADK Runner is available; pass user_id in metadata
-                    result = await self._runner.run(user_text, metadata={"user_id": user_id} if user_id else {})  # type: ignore
+                    # ADK Runner 1.1.1 is available
+                    from google.genai.types import Content, Part
+                    import uuid
+                    
+                    user_id_str = user_id or "default"
+                    sess_id = str(uuid.uuid4())
+                    msg = Content(parts=[Part.from_text(user_text)], role="user")
+                    
+                    events = self._runner.run(
+                        user_id=user_id_str,
+                        session_id=sess_id,
+                        new_message=msg
+                    )
+                    
+                    final_text = ""
+                    # handle both async and sync generator just in case
+                    if hasattr(events, "__aiter__"):
+                        async for event in events:
+                            if hasattr(event, "message") and event.message and hasattr(event.message, "parts"):
+                                for p in event.message.parts:
+                                    if hasattr(p, "text") and p.text:
+                                        final_text += p.text
+                    else:
+                        for event in events:
+                            if hasattr(event, "message") and event.message and hasattr(event.message, "parts"):
+                                for p in event.message.parts:
+                                    if hasattr(p, "text") and p.text:
+                                        final_text += p.text
+                                        
+                    result = final_text
                 else:
                     # Fallback to direct invocation on the built agent
                     invoke = getattr(self._agent, "invoke", None)
