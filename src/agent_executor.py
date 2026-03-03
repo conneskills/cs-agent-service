@@ -89,7 +89,7 @@ class ADKAgentExecutor(AgentExecutor):
             await event_queue.enqueue_event(task)
 
         service_desc = (
-            f"ADK {"Runner" if self._runner else "fallback"}" 
+            f"ADK {'Runner' if self._runner else 'fallback'}" 
         )
 
         await event_queue.enqueue_event(
