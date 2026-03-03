@@ -10,11 +10,11 @@ class PhoenixClient:
     All HTTP operations are asynchronous and errors are gracefully handled.
     """
 
-    def __init__(self, endpoint: str, api_key: str, timeout: float = 5.0):
+    def __init__(self, endpoint: str, api_key: str = None, timeout: float = 5.0):
         self.endpoint = endpoint.rstrip("/")
         self.api_key = api_key
         self.timeout = timeout
-        self.headers = {"Authorization": f"Bearer {api_key}"}
+        self.headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         # Use a persistent async client
         self.client = httpx.AsyncClient(timeout=self.timeout, headers=self.headers)
 
@@ -22,12 +22,12 @@ class PhoenixClient:
         """Close the underlying HTTP client."""
         await self.client.aclose()
 
-    async def get_prompt(self, prompt_id: str, tag: str = "prod") -> str:
+    async def get_prompt(self, prompt_name: str, tag: str = "prod") -> str:
         """
         Retrieve a single prompt by ID and optional tag/version.
         Returns the prompt text as string, or an empty string on error.
         """
-        url = f"{self.endpoint}/prompts/{prompt_id}?tag={tag}"
+        url = f"{self.endpoint}/prompts/{prompt_name}?tag={tag}"
         try:
             resp = await self.client.get(url)
             resp.raise_for_status()

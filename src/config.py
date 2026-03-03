@@ -52,7 +52,8 @@ def _load_phoenix_from_env() -> Optional[Dict[str, str]]:
     # ai-platform-api uses PHOENIX_URL and PHOENIX_API_KEY
     endpoint = os.getenv("PHOENIX_URL") or os.getenv("PHOENIX_ENDPOINT")
     api_key = os.getenv("PHOENIX_API_KEY")
-    if endpoint and api_key:
+    
+    if endpoint:
         return {"endpoint": endpoint, "api_key": api_key}
     return None
 
@@ -67,7 +68,7 @@ def _load_phoenix_from_registry() -> Optional[Dict[str, str]]:
         if resp.status_code == 200:
             data = resp.json()
             ep = data.get("endpoint")
-            key = data.get("api_key")
+            
             if ep and key:
                 return {"endpoint": ep, "api_key": key}
     except Exception:

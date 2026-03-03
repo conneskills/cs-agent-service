@@ -50,13 +50,13 @@ async def _try_phoenix_prompt(role_config: Dict[str, Any]) -> Optional[str]:
     phoenix_cfg = _get_phoenix_config()
     if not phoenix_cfg or PHX_CLIENT_CLASS is None:
         return None
-    prompt_id = role_config.get("phoenix_prompt_id") or role_config.get("name")
-    if not prompt_id:
+    prompt_name = role_config.get("phoenix_prompt_name") or role_config.get("name")
+    if not prompt_name:
         return None
     try:
-        client = PHX_CLIENT_CLASS(phoenix_cfg["endpoint"], phoenix_cfg["api_key"])  # type: ignore
+        client = PHX_CLIENT_CLASS(phoenix_cfg["endpoint"], phoenix_cfg.get("api_key"))  # type: ignore
         tag = os.getenv("PHOENIX_PROJECT_NAME", "prod")
-        return await client.get_prompt(str(prompt_id), tag=tag)  # type: ignore
+        return await client.get_prompt(str(prompt_name), tag=tag)  # type: ignore
     except Exception as exc:  # pragma: no cover - robust against many Phoenix errors
         logger.debug("Phoenix prompt retrieval failed: %s", exc)
         return None
@@ -126,7 +126,7 @@ def resolve_prompt(role_config: Dict[str, Any], prompts: Dict[str, str]) -> str:
         try:
             prompt = _run_async(_try_phoenix_prompt(role_config))
             if prompt:
-                source = f"Phoenix ({role_config.get("phoenix_prompt_id", role_name)})"
+                source = f"Phoenix ({role_config.get("phoenix_prompt_name", role_name)})"
                 logger.info("Prompt source: %s", source)
                 if span:
                     span.set_attribute("prompt.source", "Phoenix")
