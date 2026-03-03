@@ -138,7 +138,7 @@ class ADKAgentExecutor(AgentExecutor):
                     
                     user_id_str = user_id or "default"
                     sess_id = str(uuid.uuid4())
-                    msg = Content(parts=[Part.from_text(user_text)], role="user")
+                    msg = Content(parts=[Part.from_text(text=user_text)], role="user")
                     
                     events = self._runner.run(
                         user_id=user_id_str,

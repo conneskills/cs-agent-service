@@ -40,6 +40,8 @@ async def test_adk_executor_runs_with_runner(monkeypatch):
             
             # Since ADK 1.1.1 run() returns an async generator:
             yield DummyEvent(f"ADK_RESULT:{new_message.parts[0].text if hasattr(new_message, 'parts') else new_message}")
+            
+    with patch("google.adk.runners.Runner", return_value=FakeRunner()):
         executor = ADKAgentExecutor()
         ctx = DummyContext("test input")
         ev = DummyEventQueue()
