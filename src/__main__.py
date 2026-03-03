@@ -68,11 +68,13 @@ def main():
     except Exception as e:
         logger.warning(f"AG-UI Middleware integration failed: {e}")
 
+    starlette_app = app.build()
+
     # ADR-001: JSON-RPC 2.0 handler for A2A protocol support
     from starlette.requests import Request
     from starlette.responses import JSONResponse
 
-    @app.post("/")
+    @starlette_app.post("/")
     async def a2a_jsonrpc_handler(request: Request):
         """Handler for A2A JSON-RPC 2.0 requests."""
         try:
@@ -122,7 +124,7 @@ def main():
         f"Starting A2A server: {agent_name} on port {port} [execution_type={execution_type}]"
     )
 
-    uvicorn.run(app.build(), host="0.0.0.0", port=port)
+    uvicorn.run(starlette_app, host="0.0.0.0", port=port)
 
 
 if __name__ == "__main__":
