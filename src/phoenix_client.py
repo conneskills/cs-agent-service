@@ -1,7 +1,12 @@
+"""
+Lightweight Phoenix client to fetch prompts from the Arize Phoenix API.
+"""
 from __future__ import annotations
-from typing import List, Dict
+from typing import List, Dict, Any, Optional
 import httpx
+import logging
 
+logger = logging.getLogger(__name__)
 
 class PhoenixClient:
     """
@@ -10,8 +15,12 @@ class PhoenixClient:
     All HTTP operations are asynchronous and errors are gracefully handled.
     """
 
-    def __init__(self, endpoint: str, api_key: str = None, timeout: float = 5.0):
+    def __init__(self, endpoint: str, api_key: Optional[str] = None, timeout: float = 10.0):
+        # Ensure endpoint doesn't end with /v1 as we add it in methods
         self.endpoint = endpoint.rstrip("/")
+        if self.endpoint.endswith("/v1"):
+            self.endpoint = self.endpoint[:-3]
+            
         self.api_key = api_key
         self.timeout = timeout
         self.headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
@@ -22,45 +31,77 @@ class PhoenixClient:
         """Close the underlying HTTP client."""
         await self.client.aclose()
 
-    async def get_prompt(self, prompt_name: str, tag: str = "prod") -> str:
+    async def get_prompt(self, prompt_name: str, tag: str = "production") -> Dict[str, Any]:
         """
-        Retrieve a single prompt by ID and optional tag/version.
-        Returns the prompt text as string, or an empty string on error.
+        Retrieve a single prompt by name and tag from Phoenix API v1.
+        
+        Returns:
+            Dict containing:
+            - 'text': The resolved system prompt string.
+            - 'model': The model name associated with the prompt in Phoenix.
         """
-        url = f"{self.endpoint}/prompts/{prompt_name}?tag={tag}"
+        # Try tag first
+        url = f"{self.endpoint}/v1/prompts/{prompt_name}/tags/{tag}"
         try:
             resp = await self.client.get(url)
+            
+            # Fallback to latest if tag not found or other client error
+            if resp.status_code == 404:
+                logger.debug("Prompt tag '%s' not found for '%s', trying /latest", tag, prompt_name)
+                url = f"{self.endpoint}/v1/prompts/{prompt_name}/latest"
+                resp = await self.client.get(url)
+                
             resp.raise_for_status()
-            data = resp.json()
-            if isinstance(data, dict):
-                # Common shapes: { "prompt": "...", "text": "..." }
-                return str(data.get("prompt") or data.get("text") or "")
-            if isinstance(data, str):
-                return data
-            return ""
-        except httpx.RequestError:
-            # Connection issues
-            return ""
-        except httpx.HTTPStatusError:
-            # Non-2xx status
-            return ""
+            data_wrapper = resp.json()
+            data = data_wrapper.get("data", {})
+            
+            result = {
+                "text": "",
+                "model": data.get("model_name")
+            }
+            
+            template = data.get("template", {})
+            template_type = template.get("type", "string")
+            
+            if template_type == "chat":
+                # Handle Phoenix CHAT template format
+                messages = template.get("messages", [])
+                for msg in messages:
+                    if msg.get("role") == "system":
+                        content_list = msg.get("content", [])
+                        if content_list and isinstance(content_list, list):
+                            result["text"] = content_list[0].get("text", "")
+                            break
+                # Fallback if no system message found
+                if not result["text"] and messages:
+                    content_list = messages[0].get("content", [])
+                    if content_list and isinstance(content_list, list):
+                        result["text"] = content_list[0].get("text", "")
+            else:
+                # Handle Phoenix string template format
+                result["text"] = template.get("template") or str(data_wrapper.get("prompt") or "")
+                
+            return result
+            
+        except Exception as e:
+            logger.error("Error fetching prompt '%s' from Phoenix: %s", prompt_name, e)
+            return {"text": "", "model": None}
 
-    async def list_prompts(self) -> List[Dict]:
+    async def list_prompts(self) -> List[Dict[str, Any]]:
         """
-        Retrieve a list of available prompts.
-        Returns a list of dicts, or an empty list on error.
+        Retrieve a list of available prompts from Phoenix API v1.
         """
-        url = f"{self.endpoint}/prompts"
+        url = f"{self.endpoint}/v1/prompts"
         try:
             resp = await self.client.get(url)
             resp.raise_for_status()
             data = resp.json()
+            # Phoenix v1 returns { "data": [...], "next_cursor": ... }
+            if isinstance(data, dict) and "data" in data:
+                return data["data"]
             if isinstance(data, list):
                 return data
-            if isinstance(data, dict) and "prompts" in data and isinstance(data["prompts"], list):
-                return data["prompts"]
             return []
-        except httpx.RequestError:
-            return []
-        except httpx.HTTPStatusError:
+        except Exception as e:
+            logger.error("Error listing prompts from Phoenix: %s", e)
             return []

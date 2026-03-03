@@ -39,27 +39,30 @@ def _run_async(coro):
     # A loop is already running (e.g. FastAPI/uvicorn).
     # Execute the coroutine in a separate thread with its own event loop.
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        return pool.submit(asyncio.run, coro).result(timeout=5)
+        return pool.submit(asyncio.run, coro).result(timeout=10)
 
 
 def _default_prompt(role_config: Dict[str, Any]) -> str:
     return "You are an AI assistant."
 
 
-async def _try_phoenix_prompt(role_config: Dict[str, Any]) -> Optional[str]:
+async def _try_phoenix_prompt(role_config: Dict[str, Any]) -> Dict[str, Any]:
     phoenix_cfg = _get_phoenix_config()
     if not phoenix_cfg or PHX_CLIENT_CLASS is None:
-        return None
+        return {"text": "", "model": None}
+        
     prompt_name = role_config.get("phoenix_prompt_name") or role_config.get("name")
     if not prompt_name:
-        return None
+        return {"text": "", "model": None}
+        
     try:
         client = PHX_CLIENT_CLASS(phoenix_cfg["endpoint"], phoenix_cfg.get("api_key"))  # type: ignore
-        tag = os.getenv("PHOENIX_PROJECT_NAME", "prod")
+        # Priority tag: production -> latest
+        tag = os.getenv("PHOENIX_PROMPT_TAG", "production")
         return await client.get_prompt(str(prompt_name), tag=tag)  # type: ignore
-    except Exception as exc:  # pragma: no cover - robust against many Phoenix errors
+    except Exception as exc:  # pragma: no cover
         logger.debug("Phoenix prompt retrieval failed: %s", exc)
-        return None
+        return {"text": "", "model": None}
 
 
 def _read_from_registry(role_name: str) -> Optional[str]:
@@ -107,12 +110,11 @@ def _read_from_file(role_name: str) -> Optional[str]:
     return None
 
 
-def resolve_prompt(role_config: Dict[str, Any], prompts: Dict[str, str]) -> str:
-    """Resolve the prompt text for a given role using the resolution chain.
+def resolve_prompt(role_config: Dict[str, Any], prompts: Dict[str, str]) -> Dict[str, Any]:
+    """Resolve the prompt text and model for a given role using the resolution chain.
 
     Priority: Phoenix (primary) -> LiteLLM -> Registry -> Local file -> Default.
-    - role_config may contain a phoenix_prompt_id to fetch via Phoenix.
-    - prompts mapping is used for LiteLLM fallback (role_name -> prompt).
+    Returns a dict with 'instruction' and 'model'.
     """
     tracer = TracerManager.get_tracer()
     span_cm = tracer.start_as_current_span("resolve_prompt") if tracer else contextlib.nullcontext()
@@ -124,50 +126,46 @@ def resolve_prompt(role_config: Dict[str, Any], prompts: Dict[str, str]) -> str:
 
         # 1) Try Phoenix (async client, called from sync context)
         try:
-            prompt = _run_async(_try_phoenix_prompt(role_config))
-            if prompt:
-                source = f"Phoenix ({role_config.get("phoenix_prompt_name", role_name)})"
+            res = _run_async(_try_phoenix_prompt(role_config))
+            if res.get("text"):
+                source = f"Phoenix ({role_config.get('phoenix_prompt_name', role_name)})"
                 logger.info("Prompt source: %s", source)
                 if span:
                     span.set_attribute("prompt.source", "Phoenix")
-                return prompt
+                    if res.get("model"):
+                        span.set_attribute("prompt.model", res["model"])
+                return {"instruction": res["text"], "model": res.get("model")}
         except Exception:
-            # If anything goes wrong, fall back to next source
             pass
 
-        # 2) LiteLLM fallback using role mapping (if provided by runtime)
+        # 2) LiteLLM fallback using role mapping
+        instruction = ""
+        source = ""
+        
         if isinstance(prompts, dict) and role_name in prompts:
-            prompt = prompts[role_name]
-            logger.info("Prompt source: LiteLLM (runtime prompts mapping) for %s", role_name)
-            if span:
-                span.set_attribute("prompt.source", "LiteLLM-Mapping")
-            return prompt
-        if isinstance(role_config, dict) and "instruction" in role_config and isinstance(role_config.get("instruction"), str) and role_config.get("instruction"):
-            logger.info("Prompt source: LiteLLM (explicit instruction) for %s", role_name)
-            if span:
-                span.set_attribute("prompt.source", "LiteLLM-Explicit")
-            return role_config.get("instruction")  # type: ignore
+            instruction = prompts[role_name]
+            source = "LiteLLM-Mapping"
+        elif isinstance(role_config, dict) and role_config.get("instruction"):
+            instruction = role_config.get("instruction")
+            source = "LiteLLM-Explicit"
+        elif role_name:
+            # 3) Registry API
+            instruction = _read_from_registry(role_name)
+            if instruction:
+                source = "Registry"
+            else:
+                # 4) Local file prompts
+                instruction = _read_from_file(role_name)
+                if instruction:
+                    source = "LocalFile"
 
-        # 3) Registry API
-        if role_name:
-            reg_prompt = _read_from_registry(role_name)
-            if reg_prompt:
-                logger.info("Prompt source: Registry for %s", role_name)
-                if span:
-                    span.set_attribute("prompt.source", "Registry")
-                return reg_prompt
+        if not instruction:
+            # 5) Default system prompt
+            instruction = _default_prompt(role_config)
+            source = "Default"
 
-        # 4) Local file prompts
-        if role_name:
-            file_prompt = _read_from_file(role_name)
-            if file_prompt:
-                logger.info("Prompt source: Local file for %s", role_name)
-                if span:
-                    span.set_attribute("prompt.source", "LocalFile")
-                return file_prompt
-
-        # 5) Default system prompt
-        logger.info("Prompt source: Default system prompt for %s", role_name)
+        logger.info("Prompt source: %s for %s", source, role_name)
         if span:
-            span.set_attribute("prompt.source", "Default")
-        return _default_prompt(role_config)
+            span.set_attribute("prompt.source", source)
+            
+        return {"instruction": instruction, "model": None}
