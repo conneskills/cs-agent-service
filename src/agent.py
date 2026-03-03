@@ -144,7 +144,7 @@ class AgentService:
             try:
                 resp = httpx.get(
                     f"{self.registry_url}/agents/{self.agent_id}",
-                    timeout=10.0,
+                    timeout=httpx.Timeout(10.0, connect=3.0),
                     headers=headers,
                 )
                 resp.raise_for_status()
@@ -285,7 +285,7 @@ class AgentService:
         try:
             resp = httpx.get(
                 f"{self.registry_url}/prompts/{prompt_ref}",
-                timeout=10.0,
+                timeout=httpx.Timeout(10.0, connect=3.0),
             )
             if resp.status_code != 200:
                 return None

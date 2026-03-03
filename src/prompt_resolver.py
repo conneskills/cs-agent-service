@@ -33,7 +33,7 @@ def _run_async(coro):
         loop = None
 
     if loop is None:
-        # No loop running — safe to use asyncio.run()
+        # No loop running - safe to use asyncio.run()
         return asyncio.run(coro)
 
     # A loop is already running (e.g. FastAPI/uvicorn).
@@ -55,14 +55,15 @@ async def _try_phoenix_prompt(role_config: Dict[str, Any]) -> Optional[str]:
         return None
     try:
         client = PHX_CLIENT_CLASS(phoenix_cfg["endpoint"], phoenix_cfg["api_key"])  # type: ignore
-        return await client.get_prompt(str(prompt_id))  # type: ignore
+        tag = os.getenv("PHOENIX_PROJECT_NAME", "prod")
+        return await client.get_prompt(str(prompt_id), tag=tag)  # type: ignore
     except Exception as exc:  # pragma: no cover - robust against many Phoenix errors
         logger.debug("Phoenix prompt retrieval failed: %s", exc)
         return None
 
 
 def _read_from_registry(role_name: str) -> Optional[str]:
-    reg_url = os.getenv("REGISTRY_API_URL", "")
+    reg_url = os.getenv("REGISTRY_URL", "")
     if not reg_url:
         return None
     try:
@@ -125,7 +126,7 @@ def resolve_prompt(role_config: Dict[str, Any], prompts: Dict[str, str]) -> str:
         try:
             prompt = _run_async(_try_phoenix_prompt(role_config))
             if prompt:
-                source = f"Phoenix ({role_config.get('phoenix_prompt_id', role_name)})"
+                source = f"Phoenix ({role_config.get("phoenix_prompt_id", role_name)})"
                 logger.info("Prompt source: %s", source)
                 if span:
                     span.set_attribute("prompt.source", "Phoenix")

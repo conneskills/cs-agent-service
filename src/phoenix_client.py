@@ -22,12 +22,12 @@ class PhoenixClient:
         """Close the underlying HTTP client."""
         await self.client.aclose()
 
-    async def get_prompt(self, prompt_id: str) -> str:
+    async def get_prompt(self, prompt_id: str, tag: str = "prod") -> str:
         """
-        Retrieve a single prompt by ID.
+        Retrieve a single prompt by ID and optional tag/version.
         Returns the prompt text as string, or an empty string on error.
         """
-        url = f"{self.endpoint}/prompts/{prompt_id}"
+        url = f"{self.endpoint}/prompts/{prompt_id}?tag={tag}"
         try:
             resp = await self.client.get(url)
             resp.raise_for_status()

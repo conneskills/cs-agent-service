@@ -53,7 +53,7 @@ class TracerManager:
             return False
 
         # Endpoint can come from env var or application config; try common names
-        endpoint = os.getenv("OTEL_ENDPOINT") or os.getenv("PHOENIX_OTLP_ENDPOINT") or os.getenv("PHOENIX_ENDPOINT")
+        endpoint = os.getenv("OTEL_ENDPOINT") or os.getenv("PHOENIX_OTLP_ENDPOINT") or os.getenv("PHOENIX_ENDPOINT") or os.getenv("PHOENIX_URL")
         if not endpoint:
             # No endpoint configured; tracing remains disabled
             TracerManager.enabled = False
@@ -89,7 +89,7 @@ class TracerManager:
         return {
             "enabled": TracerManager.enabled,
             "otel_available": OTEL_AVAILABLE,
-            "endpoint": os.getenv("OTEL_ENDPOINT") or os.getenv("PHOENIX_OTLP_ENDPOINT") or os.getenv("PHOENIX_ENDPOINT"),
+            "endpoint": os.getenv("OTEL_ENDPOINT") or os.getenv("PHOENIX_OTLP_ENDPOINT") or os.getenv("PHOENIX_ENDPOINT") or os.getenv("PHOENIX_URL"),
             "has_tracer": TracerManager.tracer is not None,
         }
 

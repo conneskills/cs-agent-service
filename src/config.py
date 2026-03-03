@@ -5,16 +5,16 @@ import os
 PHOENIX_ENDPOINT: Optional[str] = None
 PHOENIX_API_KEY: Optional[str] = None
 PHOENIX_ENABLED: bool = False
-REGISTRY_API_URL: str = os.getenv("REGISTRY_API_URL", "")
+REGISTRY_URL: str = os.getenv("REGISTRY_URL", "")
 BUILTIN_TOOLS: List[str] = []
 
 def _load_builtin_tools_from_registry() -> Union[List[str], None]:
     """Load builtin tool IDs from the Registry service if available."""
-    if not REGISTRY_API_URL:
+    if not REGISTRY_URL:
         return None
     try:
         import httpx  # type: ignore
-        resp = httpx.get(f"{REGISTRY_API_URL}/builtin-tools", timeout=2.0)
+        resp = httpx.get(f"{REGISTRY_URL}/builtin-tools", timeout=2.0)
         if resp.status_code == 200:
             data = resp.json()
             tools = data.get("tools") or data.get("builtin_tools")
@@ -49,7 +49,8 @@ def get_builtin_tools() -> List[str]:
 
 
 def _load_phoenix_from_env() -> Optional[Dict[str, str]]:
-    endpoint = os.getenv("PHOENIX_ENDPOINT")
+    # ai-platform-api uses PHOENIX_URL and PHOENIX_API_KEY
+    endpoint = os.getenv("PHOENIX_URL") or os.getenv("PHOENIX_ENDPOINT")
     api_key = os.getenv("PHOENIX_API_KEY")
     if endpoint and api_key:
         return {"endpoint": endpoint, "api_key": api_key}
@@ -57,12 +58,12 @@ def _load_phoenix_from_env() -> Optional[Dict[str, str]]:
 
 
 def _load_phoenix_from_registry() -> Optional[Dict[str, str]]:
-    if not REGISTRY_API_URL:
+    if not REGISTRY_URL:
         return None
     try:
         # Optional dependency; if unavailable, skip registry config load
         import httpx  # type: ignore
-        resp = httpx.get(f"{REGISTRY_API_URL}/phoenix-config", timeout=2.0)
+        resp = httpx.get(f"{REGISTRY_URL}/phoenix-config", timeout=2.0)
         if resp.status_code == 200:
             data = resp.json()
             ep = data.get("endpoint")

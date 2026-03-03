@@ -1,6 +1,6 @@
 """ADK-based AgentExecutor wrapper for A2A server.
 
-This module provides ADKAgentExecutor which uses google's ADK Runner when
+This module provides ADKAgentExecutor which uses google"s ADK Runner when
 available. It falls back to the existing single-agent invocation path when
 ADK is not present. The executor implements the A2A AgentExecutor interface
 so it can be plugged into the DefaultRequestHandler used by the A2A server.
@@ -45,24 +45,23 @@ class ADKAgentExecutor(AgentExecutor):
 
     def __init__(self):
         # Runtime config is discovered lazily to avoid importing ADK during
-        # module import in environments where ADK isn't installed.
+        # module import in environments where ADK isn"t installed.
         self._runner = None  # type: ignore
         self._agent = None
         self.factory = None  # type: ignore
         self.agent_data = None
+        self.runtime_config = {}
 
         # Attempt to build the ADK-backed agent using the existing runtime
         # configuration if available.
         agent_id = os.getenv("AGENT_ID")
-        runtime_config = {}
         if agent_id:
-            from src.utils.registry import fetch_agent_config
+            from src.utils.registry import fetch_agent_config, fetch_runtime_config
             self.agent_data = fetch_agent_config(agent_id)
-            if self.agent_data:
-                runtime_config = self.agent_data.get("runtime_config") or {}
+            self.runtime_config = fetch_runtime_config(agent_id) or {}
 
         # Build agent using factory
-        self.factory = AgentFactory(runtime_config, {})
+        self.factory = AgentFactory(self.runtime_config, {})
         self._agent = self.factory.build()
 
         # Try to initialize ADK Runner if the package is available
@@ -90,7 +89,7 @@ class ADKAgentExecutor(AgentExecutor):
             await event_queue.enqueue_event(task)
 
         service_desc = (
-            f"ADK {'Runner' if self._runner else 'fallback'}" 
+            f"ADK {"Runner" if self._runner else "fallback"}" 
         )
 
         await event_queue.enqueue_event(

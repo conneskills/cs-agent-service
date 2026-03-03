@@ -137,7 +137,7 @@ def _load_tools(role_config: dict) -> List[FunctionTool]:
         if not active:
             continue
         if provider == "mcp":
-            # skip MCP-provided tools in this phase (we'll merge MCP tools later)
+            # skip MCP-provided tools in this phase (we"ll merge MCP tools later)
             continue
         if provider == "builtin":
             tools.append(FunctionTool(tool_id or "unknown"))
@@ -164,7 +164,7 @@ def _load_tools(role_config: dict) -> List[FunctionTool]:
 
 
 def _build_llm_agent(role_config: dict, prompts: Dict[str, str], tools: List[FunctionTool]) -> LlmAgent:
-    # Role name drives prompts; default to 'agent' if not provided
+    # Role name drives prompts; default to "agent" if not provided
     role_name = role_config.get("name", "agent")
     # Resolve instruction/prompt using the prompt resolver (Phoenix-first, then fallbacks)
     instruction = ""
@@ -194,11 +194,15 @@ class AgentFactory:
     def build(self) -> BaseAgent:
         # Load tools for the chosen path
         execution_type = self.runtime_config.get("execution_type", "single")
+        
+        # In ADK v2, tools might be per role. _load_tools handles common cases.
         self._tools = _load_tools(self.runtime_config)
 
         # Support multiple execution patterns introduced by ADK migration plan
         if execution_type == "single":
-            return _build_llm_agent(self.runtime_config, self.resolved_prompts, self._tools)
+            roles = self.runtime_config.get("roles", [])
+            role_cfg = roles[0] if roles else self.runtime_config
+            return _build_llm_agent(role_cfg, self.resolved_prompts, self._tools)
         if execution_type == "sequential":
             return self._build_sequential(self.runtime_config.get("roles", []), self.resolved_prompts)
         if execution_type == "parallel":
@@ -212,19 +216,19 @@ class AgentFactory:
         if execution_type == "hybrid":
             return self._build_hybrid(self.runtime_config.get("roles", []), self.resolved_prompts, self.runtime_config)
 
-        # Fallback to single execution for any other mode in this phase
+        # Fallback to single execution
         return _build_llm_agent(self.runtime_config, self.resolved_prompts, self._tools)
 
     # --------- New builder helpers for multi-agent patterns ---------
     def _build_sequential(self, roles: List[dict], prompts: Dict[str, str]) -> "SequentialAgent":
-        sub_agents = [_build_llm_agent(r, prompts, self._tools) for r in roles]
+        sub_agents = [_build_llm_agent(r, prompts, _load_tools(r)) for r in roles]
         return SequentialAgent(name="pipeline", sub_agents=sub_agents)
 
     def _build_parallel(self, roles: List[dict], prompts: Dict[str, str], config: dict) -> BaseAgent:
         aggregator_name = config.get("aggregator_role")
 
         # Build parallel agents (excluding aggregator)
-        parallel_agents = [_build_llm_agent(r, prompts, self._tools) for r in roles if r.get("name") != aggregator_name]
+        parallel_agents = [_build_llm_agent(r, prompts, _load_tools(r)) for r in roles if r.get("name") != aggregator_name]
 
         parallel = ParallelAgent(name="fan_out", sub_agents=parallel_agents)
 
@@ -232,21 +236,21 @@ class AgentFactory:
         if aggregator_name:
             agg_config = next((r for r in roles if r.get("name") == aggregator_name), None)
             if agg_config:
-                aggregator = _build_llm_agent(agg_config, prompts, self._tools)
+                aggregator = _build_llm_agent(agg_config, prompts, _load_tools(agg_config))
                 return SequentialAgent(name="parallel_gather", sub_agents=[parallel, aggregator])
         return parallel
 
     def _build_loop(self, roles: List[dict], prompts: Dict[str, str], config: dict) -> BaseAgent:
-        sub_agents = [_build_llm_agent(r, prompts, self._tools) for r in roles]
+        sub_agents = [_build_llm_agent(r, prompts, _load_tools(r)) for r in roles]
         max_iters = config.get("max_iterations", 5)
         return LoopAgent(name="refiner", sub_agents=sub_agents, max_iterations=max_iters)
 
     def _build_coordinator(self, roles: List[dict], prompts: Dict[str, str], config: dict) -> BaseAgent:
         coordinator_role = config.get("coordinator_role")
-        workers = [_build_llm_agent(r, prompts, self._tools) for r in roles if r.get("name") != coordinator_role]
+        workers = [_build_llm_agent(r, prompts, _load_tools(r)) for r in roles if r.get("name") != coordinator_role]
         
         coord_config = next((r for r in roles if r.get("name") == coordinator_role), roles[0])
-        coordinator = _build_llm_agent(coord_config, prompts, self._tools)
+        coordinator = _build_llm_agent(coord_config, prompts, _load_tools(coord_config))
         
         # Add workers as tools to the coordinator
         if hasattr(coordinator, "tools"):
@@ -255,10 +259,10 @@ class AgentFactory:
 
     def _build_hub_spoke(self, roles: List[dict], prompts: Dict[str, str], config: dict) -> BaseAgent:
         hub_role = config.get("hub_role")
-        spokes = [_build_llm_agent(r, prompts, self._tools) for r in roles if r.get("name") != hub_role]
+        spokes = [_build_llm_agent(r, prompts, _load_tools(r)) for r in roles if r.get("name") != hub_role]
         
         hub_config = next((r for r in roles if r.get("name") == hub_role), roles[0])
-        hub = _build_llm_agent(hub_config, prompts, self._tools)
+        hub = _build_llm_agent(hub_config, prompts, _load_tools(hub_config))
         
         # Add spokes as tools to the hub
         if hasattr(hub, "tools"):
@@ -270,7 +274,7 @@ class AgentFactory:
         if len(roles) < 2:
             return _build_llm_agent(roles[0] if roles else {}, prompts, self._tools)
             
-        slm_agent = _build_llm_agent(roles[0], prompts, self._tools)
-        llm_agent = _build_llm_agent(roles[1], prompts, self._tools)
+        slm_agent = _build_llm_agent(roles[0], prompts, _load_tools(roles[0]))
+        llm_agent = _build_llm_agent(roles[1], prompts, _load_tools(roles[1]))
         
         return HybridOrchestrator(name="hybrid_orchestrator", slm_agent=slm_agent, llm_agent=llm_agent)

@@ -22,4 +22,5 @@ venv/
 .shared
 .serena
 bin
-.gemini 
+.gemini
+.graphiq

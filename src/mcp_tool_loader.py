@@ -88,7 +88,7 @@ class MCPToolLoader:
         all_tools = []
         
         # Load servers from config
-        registry_url = os.getenv("REGISTRY_API_URL")
+        registry_url = os.getenv("REGISTRY_URL")
         servers = list_servers(registry_url)
         
         # Attempt discovery via an external ADK-like package if present

@@ -22,9 +22,9 @@ El sistema necesita soportar el deploy dinámico de agentes de IA por cliente, d
 | `cs-agent-registry-api` | `conneskills/cs-agent-registry-api` | Orquestador lógico: Mapping agents-skills-tools + Proxy de prompts |
 | `ai-platform-api` | `conneskills/ai-platform-api` | **Plano de Infraestructura**: GCP (Cloud Run, Secrets), LiteLLM keys + User Secrets |
 | `ui-usuario` | Pendiente | UI de gestión de credenciales de servicios externos y prompts |
-| `litellm` | Servicio externo desplegado | Proxy LLM: rate limiting, routing, API keys por agente |
-| `zenml` | Servicio externo desplegado | Pipelines de datos, procesamiento pesado, gestión de assets |
-| `phoenix` (Arize) | Servicio externo | **Prompt Management Engine**, Observabilidad OTEL y Evals |
+| `litellm` | Servicio de Plataforma | Proxy LLM: rate limiting, routing, API keys por agente |
+| `zenml` | Servicio de Plataforma | Pipelines de datos, procesamiento pesado, gestión de assets |
+| `phoenix` (Arize) | Servicio de Plataforma | **Prompt Management Engine**, Observabilidad OTEL y Evals |
 | `jobs` (Redis) | Infraestructura interna | Gestión de estado asíncrono de deploys y provisiones |
 
 ---
@@ -366,7 +366,7 @@ Dado que Phoenix es single-tenant, la `ai-platform-api` implementará un **Proxy
 ZenML maneja todas las tareas de procesamiento intensivo, **fuera** del ciclo request/response del agente.
 
 **Integración con `ai-platform-api`:**
-Se registrará como **Servicio Externo** tipo `ZENML` (`POST /api/v1/external-services`). Aprovecha la infraestructura existente para gestionar credenciales y conectividad.
+Se gestiona como un servicio de plataforma core. La `ai-platform-api` interactúa con ZenML utilizando credenciales de sistema configuradas en el entorno de despliegue.
 
 **Responsabilidades:**
 - Ingesta y limpieza de datos
@@ -466,13 +466,15 @@ sequenceDiagram
 
     Dev->>Phoenix: 1. Crear/versionar prompt en Playground
     Dev->>Registry: 2. Registrar Metadata del Agente (ID, Tools, Prompt Ref)
-    Dev->>PlatformAPI: 3. POST /agents/deploy {customer_id, agent_id}
-    PlatformAPI->>PlatformAPI: 4. Generar LiteLLM key y Secret
-    PlatformAPI->>CloudRun: 5. Deploy service (AGENT_ID y REGISTRY_URL env vars)
-    CloudRun->>Registry: 6. GET /agents/{agent_id} (startup config)
-    Registry-->>CloudRun: 7. Retorna phoenix_prompt_id y MCP Config
-    CloudRun->>Phoenix: 8. GET /prompts/{id} (descarga instrucción)
-    CloudRun->>CloudRun: 9. Construye ADK Agent
+    Dev->>PlatformAPI: 3. POST /agents/deploy {customer_id, agent_id, registry_url}
+    PlatformAPI->>Registry: 4. GET /agents/{agent_id} (obtiene nombre y config)
+    PlatformAPI->>PlatformAPI: 5. Generar LiteLLM key y Secret
+    PlatformAPI->>CloudRun: 6. Deploy service (AGENT_ID y REGISTRY_URL env vars)
+    PlatformAPI->>Registry: 7. PATCH /agents/{agent_id}/url (registra URL final)
+    CloudRun->>Registry: 8. GET /agents/{agent_id} (startup config)
+    Registry-->>CloudRun: 9. Retorna phoenix_prompt_id y MCP Config
+    CloudRun->>Phoenix: 10. GET /prompts/{id} (descarga instrucción)
+    CloudRun->>CloudRun: 11. Construye ADK Agent
 ```
 
 ---
@@ -578,7 +580,7 @@ El despliegue de agentes depende del flujo existente `POST /api/v1/customers`. E
 - **Proyecto Jira:** (Opcional) Para que el agente cree tickets.
 
 ### 2. Bases de Datos Dedicadas
-Los servicios *stateful* requeridos por la arquitectura (Registry API, Phoenix) usarán el endpoint existente `POST /external-services/{id}/create_service_database` para provisionar sus DBs en Postgres con credenciales rotadas automáticamente en Secret Manager.
+Los servicios *stateful* requeridos por la arquitectura (Registry API, Phoenix) usarán mecanismos de provisionamiento de plataforma para sus DBs en Postgres con credenciales rotadas automáticamente en Secret Manager.
 
 ### 3. Build de Imagen Base (CI/CD)
 La imagen única `cs-agent-service` se gestionará mediante el endpoint `POST /api/v1/services/setup-image-build`, conectando el repo a Cloud Build. Esto asegura que cualquier actualización al runtime de ADK se propague automáticamente a la imagen `latest`.
@@ -611,21 +613,17 @@ Al recibir `PATCH /agents/{id}/url`, el agente se auto-registra en LiteLLM `/v1/
 ### 1. Resolución de Secretos para Agentes
 Asegurar que el endpoint `GET /api/v1/secrets/{name}/value` esté disponible y sea accesible por los agentes durante su inicialización para resolver parámetros MCP de tipo `secret`.
 
-### 2. Añadir `PHOENIX` y `ZENML` al `ExternalServiceType`
-Permitir el registro de estos servicios para la gestión de sus bases de datos y secretos de infraestructura.
-
-```python
-class ExternalServiceType(str, Enum):
-    # ... existentes ...
-    PHOENIX = "phoenix"    # Prompt Management + Tracing
-    ZENML = "zenml"        # Pipelines de datos
-```
+### 2. Gestión de Infraestructura Core (Phoenix y ZenML)
+Estos servicios se gestionan como infraestructura core de la plataforma y no como `ExternalService` (que se reservan para integraciones de usuario final como Jira, Slack, etc.). Su configuración y secretos se manejan a nivel de despliegue de plataforma, no mediante la API de servicios externos.
 
 ### 3. Flujo de Infraestructura en `agent_deployment.py`
-Simplificar el despliegue para que solo se encargue de:
-- Generar y almacenar la LiteLLM API Key del agente.
+Simplificar el despliegue para que sea **Registry-first**:
+- Recibe `agent_id` y `registry_url`.
+- Consulta al Registry para obtener el `name` (nombre del servicio) e `is_public` (configuración de acceso).
+- **Aislamiento de Responsabilidades**: El Registry **no** gestiona parámetros de infraestructura (CPU, Memoria, etc.). Estos siguen siendo responsabilidad de la Platform API (vía parámetros de request o defaults).
+- Genera y almacena la LiteLLM API Key del agente.
 - Desplegar el contenedor con las variables de entorno `AGENT_ID` y `REGISTRY_API_URL`.
-- **Eliminar cualquier validación de prompts o llamadas al Registry.**
+- Al finalizar el deploy, actualizar el Registry con la URL asignada por Cloud Run mediante `PATCH /agents/{id}/url`.
 
 ---
 
@@ -658,7 +656,7 @@ Simplificar el despliegue para que solo se encargue de:
 - [ ] Exponer configuración `runtime_config` para agentes.
 
 ### Fase 4 — Observabilidad y Pipelines
-- [ ] Configurar Phoenix como `ExternalService`.
+- [ ] Configurar Phoenix como servicio core de plataforma.
 - [ ] Pipeline de setup de customer en ZenML.
 - [ ] OTEL tracing end-to-end → Phoenix.
 
@@ -677,7 +675,7 @@ graph TB
         UI[UI Usuario<br/>Gestión Prompts/Creds]
     end
 
-    subgraph "External Services"
+    subgraph "Platform Services"
         LL[LiteLLM<br/>Rate Limit + Routing]
         ZN[ZenML<br/>Pipelines + Assets]
         PX[Phoenix/Arize<br/>Prompt Engine + Tracing]
