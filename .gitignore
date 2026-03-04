@@ -39,3 +39,6 @@ bin/
 
 # commands and workflows
 .gemini/
+
+# commands and workflows
+.claude/

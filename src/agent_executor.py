@@ -12,6 +12,7 @@ import logging
 import os
 from typing import Any, Optional
 import contextlib
+import uuid
 
 import asyncio
 
@@ -56,9 +57,12 @@ class ADKAgentExecutor(AgentExecutor):
         # configuration if available.
         agent_id = os.getenv("AGENT_ID")
         if agent_id:
-            from src.utils.registry import fetch_agent_config, fetch_runtime_config
-            self.agent_data = fetch_agent_config(agent_id)
-            self.runtime_config = fetch_runtime_config(agent_id) or {}
+            try:
+                from src.utils.registry import fetch_agent_config, fetch_runtime_config
+                self.agent_data = fetch_agent_config(agent_id)
+                self.runtime_config = fetch_runtime_config(agent_id) or {}
+            except Exception as e:
+                logger.warning(f"Failed to fetch config from registry: {e}")
 
         # Build agent using factory
         self.factory = AgentFactory(self.runtime_config, {})
@@ -121,6 +125,7 @@ class ADKAgentExecutor(AgentExecutor):
         
         # Extract user_id from context metadata or attributes
         user_id = getattr(context, "user_id", None) or getattr(context, "metadata", {}).get("user_id")
+        session_id = context.context_id
 
         with span_cm as span:
             if span:
@@ -128,36 +133,51 @@ class ADKAgentExecutor(AgentExecutor):
                 span.set_attribute("agent.model", getattr(self._agent, "model", "unknown"))
                 span.set_attribute("execution.type", "ADK Runner" if self._runner else "Direct Invoke")
                 if user_id:
-                    span.set_attribute("user_id", user_id)
+                    span.set_attribute("user_id", str(user_id))
+                if session_id:
+                    span.set_attribute("session_id", str(session_id))
 
             try:
                 if self._runner is not None:
                     # ADK Runner handles user_id and session_id
                     from google.genai.types import Content, Part
-                    import uuid
                     
-                    user_id_str = user_id or "default"
-                    sess_id = str(uuid.uuid4())
+                    user_id_str = str(user_id) if user_id else "default"
+                    session_id_str = str(session_id) if session_id else str(uuid.uuid4())
+                    
+                    # Ensure session exists in the service
+                    try:
+                        await self._session_service.get_session(user_id=user_id_str, session_id=session_id_str)
+                    except Exception:
+                        await self._session_service.create_session(
+                            app_name="cs-agent-service",
+                            user_id=user_id_str,
+                            session_id=session_id_str
+                        )
+
                     msg = Content(parts=[Part.from_text(text=user_text)], role="user")
                     
                     # ADR-001: Execution via ADK Runner
                     events = self._runner.run(
                         user_id=user_id_str,
-                        session_id=sess_id,
+                        session_id=session_id_str,
                         new_message=msg
                     )
                     
                     final_text = ""
+                    # handle both async and sync generator
                     if hasattr(events, "__aiter__"):
                         async for event in events:
-                            if hasattr(event, "message") and event.message and hasattr(event.message, "parts"):
-                                for p in event.message.parts:
+                            content = getattr(event, "content", None)
+                            if content and hasattr(content, "parts"):
+                                for p in content.parts:
                                     if hasattr(p, "text") and p.text:
                                         final_text += p.text
                     else:
                         for event in events:
-                            if hasattr(event, "message") and event.message and hasattr(event.message, "parts"):
-                                for p in event.message.parts:
+                            content = getattr(event, "content", None)
+                            if content and hasattr(content, "parts"):
+                                for p in content.parts:
                                     if hasattr(p, "text") and p.text:
                                         final_text += p.text
                                         
@@ -168,15 +188,16 @@ class ADKAgentExecutor(AgentExecutor):
                     from google.genai.types import Content, Part
                     
                     ctx = InvocationContext(
-                        user_id=user_id or "default",
+                        user_id=str(user_id) if user_id else "default",
                         new_message=Content(parts=[Part.from_text(text=user_text)], role="user")
                     )
                     
                     events = self._agent.run_async(parent_context=ctx)
                     final_text = ""
                     async for event in events:
-                        if hasattr(event, "message") and event.message and hasattr(event.message, "parts"):
-                            for p in event.message.parts:
+                        content = getattr(event, "content", None)
+                        if content and hasattr(content, "parts"):
+                            for p in content.parts:
                                 if hasattr(p, "text") and p.text:
                                     final_text += p.text
                     result = final_text
@@ -191,7 +212,7 @@ class ADKAgentExecutor(AgentExecutor):
                         status=TaskStatus(
                             state=TaskState.failed,
                             message=new_agent_text_message(
-                                "Agent execution failed.",
+                                f"Agent execution failed: {str(e)}",
                                 task.context_id,
                                 task.id,
                             ),

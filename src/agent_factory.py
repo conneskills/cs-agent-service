@@ -15,6 +15,10 @@ logger = logging.getLogger(__name__)
 try:
     from google.adk.agents import LlmAgent, BaseAgent, SequentialAgent, ParallelAgent, LoopAgent  # type: ignore
     from google.adk.tools import FunctionTool, agent_tool  # type: ignore
+    from google.adk.models.base_llm import BaseLlm
+    from google.adk.models.llm_response import LlmResponse
+    from google.genai import types
+    from openai import AsyncOpenAI
     HAVE_ADK = True
 except Exception:
     HAVE_ADK = False
@@ -24,7 +28,7 @@ except Exception:
             return ""
 
     class LlmAgent(BaseAgent):
-        def __init__(self, name: str, model: str, instruction: str, tools: Optional[List[Any]] = None):
+        def __init__(self, name: str, model: Any, instruction: str, tools: Optional[List[Any]] = None):
             self.name = name
             self.model = model
             self.instruction = instruction
@@ -44,10 +48,71 @@ except Exception:
                 self.agent = agent
                 self.name = getattr(agent, "name", "agent_tool")
 
+class LiteLlmProxyLlm(BaseLlm):
+    """
+    Truly agnostic LLM implementation that uses the 'openai' library 
+    to call the LiteLLM proxy URL. This bypasses ADK's internal 
+    registry and eliminates the dependency on the 'litellm' python package.
+    """
+    base_url: str
+    api_key: str
+
+    async def generate_content_async(self, llm_request: Any, stream: bool = False):
+        client = AsyncOpenAI(base_url=self.base_url, api_key=self.api_key)
+        
+        messages = []
+        # Handle system instruction from ADK config
+        system_instr = getattr(llm_request.config, "system_instruction", None)
+        if system_instr:
+            messages.append({"role": "system", "content": str(system_instr)})
+            
+        # Convert ADK contents to OpenAI messages
+        for content in llm_request.contents:
+            role = "assistant" if content.role == "model" else content.role
+            text = ""
+            for p in content.parts:
+                if hasattr(p, "text") and p.text:
+                    text += p.text
+            if text:
+                messages.append({"role": role, "content": text})
+
+        # Call the proxy
+        response = await client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            stream=stream
+        )
+
+        if not stream:
+            text = response.choices[0].message.content or ""
+            yield LlmResponse(
+                content=types.Content(role="model", parts=[types.Part(text=text)]),
+                partial=False,
+                model_version=response.model
+            )
+        else:
+            full_text = ""
+            async for chunk in response:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    delta = chunk.choices[0].delta.content
+                    full_text += delta
+                    yield LlmResponse(
+                        content=types.Content(role="model", parts=[types.Part(text=delta)]),
+                        partial=True,
+                        model_version=chunk.model
+                    )
+            yield LlmResponse(
+                content=types.Content(role="model", parts=[types.Part(text=full_text)]),
+                partial=False
+            )
+
 
 def _load_tools(role_config: dict) -> List[FunctionTool]:
     tools: List[FunctionTool] = []
     tool_configs = role_config.get("tools", []) if isinstance(role_config, dict) else []
+    
+    from src.tools.function_tools import get_builtin_tool
+    
     for cfg in tool_configs:
         if isinstance(cfg, str):
             tool_id = cfg
@@ -62,14 +127,19 @@ def _load_tools(role_config: dict) -> List[FunctionTool]:
 
         if not active:
             continue
+            
         if provider == "builtin":
-            tools.append(FunctionTool(tool_id or "unknown"))
+            t = get_builtin_tool(tool_id or "")
+            if t:
+                tools.append(t)
             
     if not tool_configs:
         try:
             for bid in get_builtin_tools():
                 if bid:
-                    tools.append(FunctionTool(bid))
+                    t = get_builtin_tool(bid)
+                    if t:
+                        tools.append(t)
         except Exception:
             pass
             
@@ -78,20 +148,37 @@ def _load_tools(role_config: dict) -> List[FunctionTool]:
         loader = MCPToolLoader()
         mcp_tools = loader.load_tools_sync()
         for t in mcp_tools:
-            tool_id = getattr(t, "tool_id", None) or getattr(t, "id", None) or str(t)
-            tools.append(FunctionTool(tool_id, t))
+            # MCP tools from loader are usually already FunctionTool-compatible or 
+            # objects that ADK knows how to handle.
+            if hasattr(t, "name"):
+                tools.append(t)
     except Exception:
         pass
     return tools
 
 
+def _probe_model(model: str, base_url: str, api_key: str) -> bool:
+    """Check if the model is reachable via a minimal sync request."""
+    import httpx
+    try:
+        resp = httpx.post(
+            f"{base_url}/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={"model": model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1},
+            timeout=5.0,
+        )
+        return resp.status_code != 404
+    except Exception:
+        return False
+
+
 def _build_llm_agent(role_config: dict, prompts: Dict[str, str], tools: List[FunctionTool]) -> LlmAgent:
     role_name = role_config.get("name", "agent")
-    
+
     # 1. Resolve instruction and model from Phoenix (priority) or fallbacks
     instruction = ""
     prompt_model = None
-    
+
     try:
         from src.prompt_resolver import resolve_prompt  # type: ignore
         res = resolve_prompt(role_config, prompts)
@@ -101,12 +188,36 @@ def _build_llm_agent(role_config: dict, prompts: Dict[str, str], tools: List[Fun
         logger.warning("Failed to resolve prompt for %s: %s", role_name, e)
         instruction = role_config.get("instruction", "")
 
-    # 2. Determine model (Priority: Phoenix -> Registry -> Default)
-    model_name = prompt_model or role_config.get("model", "gpt-4o-mini")
-    model = f"litellm/{model_name}"
+    # 2. Determine model: prompt takes priority, registry is fallback
+    import os
+    litellm_url = os.getenv("LITELLM_URL", "https://litellm.conneskills.com").rstrip("/")
+    if not litellm_url.endswith("/v1"):
+        litellm_url = f"{litellm_url}/v1"
+    litellm_api_key = os.getenv("LITELLM_API_KEY", "")
+
+    registry_model = role_config.get("model", "gpt-4o-mini")
+    if prompt_model and prompt_model != registry_model:
+        if _probe_model(prompt_model, litellm_url, litellm_api_key):
+            model_name = prompt_model
+        else:
+            logger.warning(
+                "Model '%s' from prompt is unavailable, falling back to registry model '%s'",
+                prompt_model, registry_model,
+            )
+            model_name = registry_model
+    else:
+        model_name = prompt_model or registry_model
+
+    # Create the agnostic proxy LLM instance that uses 'openai' library
+    proxy_llm = LiteLlmProxyLlm(
+        model=model_name,
+        base_url=litellm_url,
+        api_key=litellm_api_key,
+    )
     
-    logger.info("Building agent %s with model %s", role_name, model)
-    return LlmAgent(name=role_name, model=model, instruction=instruction, tools=tools)
+    logger.info("Building agent %s with model %s via agnostic proxy %s", role_name, model_name, litellm_url)
+    
+    return LlmAgent(name=role_name, model=proxy_llm, instruction=instruction, tools=tools)
 
 
 class AgentFactory:
