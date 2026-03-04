@@ -12,10 +12,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # - httpx: sync HTTP client for registry/LiteLLM calls at startup
 RUN pip install --no-cache-dir \
     openai \
-    "a2a-sdk[http-server]>=0.3.0" \
+    "a2a-sdk[http-server]==0.3.23" \
     httpx \
     uvicorn \
-    google-adk
+    google-adk==1.25.0
 
 COPY src/ /app/src/
 COPY prompts/ /app/prompts/

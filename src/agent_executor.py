@@ -132,7 +132,7 @@ class ADKAgentExecutor(AgentExecutor):
 
             try:
                 if self._runner is not None:
-                    # ADK Runner 1.1.1 is available
+                    # ADK Runner handles user_id and session_id
                     from google.genai.types import Content, Part
                     import uuid
                     
@@ -140,6 +140,7 @@ class ADKAgentExecutor(AgentExecutor):
                     sess_id = str(uuid.uuid4())
                     msg = Content(parts=[Part.from_text(text=user_text)], role="user")
                     
+                    # ADR-001: Execution via ADK Runner
                     events = self._runner.run(
                         user_id=user_id_str,
                         session_id=sess_id,
@@ -147,7 +148,6 @@ class ADKAgentExecutor(AgentExecutor):
                     )
                     
                     final_text = ""
-                    # handle both async and sync generator just in case
                     if hasattr(events, "__aiter__"):
                         async for event in events:
                             if hasattr(event, "message") and event.message and hasattr(event.message, "parts"):
@@ -163,17 +163,23 @@ class ADKAgentExecutor(AgentExecutor):
                                         
                     result = final_text
                 else:
-                    # Fallback to direct invocation on the built agent
-                    invoke = getattr(self._agent, "invoke", None)
-                    kwargs = {"user_id": user_id} if user_id else {}
-                    if asyncio.iscoroutinefunction(invoke):
-                        result = await invoke(user_text, **kwargs)  # type: ignore
-                    elif callable(invoke):
-                        result = invoke(user_text, **kwargs)  # type: ignore
-                        if asyncio.isfuture(result):
-                            result = await result  # type: ignore
-                    else:
-                        result = ""
+                    # Fallback to direct invocation on the built agent using proper context
+                    from google.adk.types import InvocationContext
+                    from google.genai.types import Content, Part
+                    
+                    ctx = InvocationContext(
+                        user_id=user_id or "default",
+                        new_message=Content(parts=[Part.from_text(text=user_text)], role="user")
+                    )
+                    
+                    events = self._agent.run_async(parent_context=ctx)
+                    final_text = ""
+                    async for event in events:
+                        if hasattr(event, "message") and event.message and hasattr(event.message, "parts"):
+                            for p in event.message.parts:
+                                if hasattr(p, "text") and p.text:
+                                    final_text += p.text
+                    result = final_text
             except Exception as e:
                 if span:
                     span.record_exception(e)

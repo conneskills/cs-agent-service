@@ -4,17 +4,19 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "9100:9100"
+      - "${AGENT_PORT:-9100}:${AGENT_PORT:-9100}"
     environment:
-      - AGENT_ID=3bf1007b-c3f7-45d2-8728-1f0c3a340d8f
-      - AGENT_PORT=9100
-      - REGISTRY_URL=https://cs-agent-registry-api-mqznmwfbgq-uc.a.run.app
-      - LITELLM_API_KEY=sk-litellm-master-key-12345
-      - PHOENIX_API_KEY=phoenix_admin_secret_v1_a1b2c3d4e5f6g7h8
-      - PHOENIX_ENDPOINT=https://phoenix-mqznmwfbgq-uc.a.run.app
-      - PHOENIX_PROMPT_TAG=production
-      - OTEL_EXPORTER_OTLP_ENDPOINT=https://phoenix-mqznmwfbgq-uc.a.run.app/v1/traces
-      - PHOENIX_PROJECT_NAME=eo-agent-researcher
+      - AGENT_ID=${AGENT_ID}
+      - AGENT_PORT=${AGENT_PORT:-9100}
+      - REGISTRY_URL=${REGISTRY_URL}
+      - LITELLM_URL=${LITELLM_URL}
+      - LITELLM_API_KEY=${LITELLM_API_KEY}
+      - PHOENIX_URL=${PHOENIX_URL}
+      - PHOENIX_ENDPOINT=${PHOENIX_ENDPOINT}
+      - PHOENIX_API_KEY=${PHOENIX_API_KEY}
+      - PHOENIX_PROMPT_NAME=${PHOENIX_PROMPT_NAME}
+      - PHOENIX_PROMPT_TAG=${PHOENIX_PROMPT_TAG}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-${PHOENIX_ENDPOINT}/v1/traces}
       - PYTHONUNBUFFERED=1
     volumes:
       - ./src:/app/src

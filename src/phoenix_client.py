@@ -84,7 +84,9 @@ class PhoenixClient:
             return result
             
         except Exception as e:
-            logger.error("Error fetching prompt '%s' from Phoenix: %s", prompt_name, e)
+            logger.error("Error fetching prompt '%s' from Phoenix (%s): %s", prompt_name, url, str(e))
+            if hasattr(e, "response") and e.response:
+                logger.error("Response content: %s", e.response.text)
             return {"text": "", "model": None}
 
     async def list_prompts(self) -> List[Dict[str, Any]]:

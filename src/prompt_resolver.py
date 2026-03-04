@@ -51,7 +51,8 @@ async def _try_phoenix_prompt(role_config: Dict[str, Any]) -> Dict[str, Any]:
     if not phoenix_cfg or PHX_CLIENT_CLASS is None:
         return {"text": "", "model": None}
         
-    prompt_name = role_config.get("phoenix_prompt_name") or role_config.get("name")
+    # ADR-001 Alignment: Use global PHOENIX_PROMPT_NAME as directed
+    prompt_name = os.getenv("PHOENIX_PROMPT_NAME") or role_config.get("phoenix_prompt_name") or role_config.get("name")
     if not prompt_name:
         return {"text": "", "model": None}
         
@@ -61,7 +62,7 @@ async def _try_phoenix_prompt(role_config: Dict[str, Any]) -> Dict[str, Any]:
         tag = os.getenv("PHOENIX_PROMPT_TAG", "production")
         return await client.get_prompt(str(prompt_name), tag=tag)  # type: ignore
     except Exception as exc:  # pragma: no cover
-        logger.debug("Phoenix prompt retrieval failed: %s", exc)
+        logger.debug("Phoenix prompt retrieval failed for '%s': %s", prompt_name, exc)
         return {"text": "", "model": None}
 
 

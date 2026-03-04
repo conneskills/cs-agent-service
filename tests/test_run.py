@@ -1,49 +1,44 @@
 import sys
-import traceback
 import asyncio
+import os
+import json
 from src.agent_factory import AgentFactory
 
 async def main():
     rc = {
         "execution_type": "single",
-        "roles": [{"name": "test_agent", "instruction": "You are a test agent", "model": "gpt-4o-mini"}]
+        "roles": [{"name": "researcher", "instruction": "You are a research agent.", "model": "litellm/gemini-3.1-pro"}]
     }
     factory = AgentFactory(rc, {})
     agent = factory.build()
 
-    from google.adk.runners import Runner
-    from google.adk.sessions import InMemorySessionService
-    from google.adk import types
+    print(f"Agent built: {agent.name}")
+    print("Calling agent.run_async()...")
     
-    session_service = InMemorySessionService()
-    runner = Runner(
-        app_name="cs-agent-service",
-        agent=agent,
-        session_service=session_service
-    )
-    print("Runner initialized. Now calling run...")
     try:
-        content = types.Content(parts=[types.Part.from_text("Hello!")], role="user")
-        events = runner.run(user_id="user1", session_id="sess1", new_message=content)
+        from google.genai.types import Content, Part
+        
+        msg = Content(parts=[Part.from_text(text="Hola, ¿quién eres?")], role="user")
+        
+        # Iniciar ejecución
+        events = agent.run_async(user_id="user1", session_id="sess1", new_message=msg)
         
         final_text = ""
-        # events could be async generator or sync generator
-        if hasattr(events, "__aiter__"):
-            async for event in events:
-                if isinstance(event, types.events.ModelOutput):
-                    if event.message and event.message.parts:
-                        for p in event.message.parts:
-                            if p.text: final_text += p.text
+        async for event in events:
+            # En ADK 2.x los eventos suelen tener el atributo message
+            if hasattr(event, "message") and event.message and event.message.parts:
+                for p in event.message.parts:
+                    if hasattr(p, "text") and p.text:
+                        final_text += p.text
+            
+        if not final_text:
+            print("No output received from agent events.")
         else:
-            for event in events:
-                if isinstance(event, types.events.ModelOutput):
-                    if event.message and event.message.parts:
-                        for p in event.message.parts:
-                            if p.text: final_text += p.text
-                            
-        print(f"Final response: {final_text}")
+            print(f"\n--- Result ---\n{final_text}\n--------------")
+            
     except Exception as e:
-        print("Run failed!")
+        print(f"Run failed: {e}")
+        import traceback
         traceback.print_exc()
 
 if __name__ == "__main__":
