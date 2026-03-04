@@ -9,13 +9,6 @@
         "@upstash/context7-mcp@latest"
       ]
     },
-    "alma-code-search": {
-      "type": "local",
-      "command": [
-        "uvx",
-        "alma-code-search"
-      ]
-    },
     "serena": {
       "type": "local",
       "command": [
