@@ -25,3 +25,17 @@ bin
 .opencode.json
 GEMINI.md
 CLAUDE.md
+# Local search index
+.indexes/
+
+# Alma Coder shared core
+.shared/
+
+# Serena MCP memory and state
+.serena/
+
+# CLI tools
+bin/
+
+# commands and workflows
+.gemini/
