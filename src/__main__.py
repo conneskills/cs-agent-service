@@ -70,6 +70,12 @@ def main():
 
     starlette_app = app.build()
     
+    # Add health check endpoint
+    from starlette.responses import JSONResponse
+    @starlette_app.route("/health", methods=["GET"])
+    async def health_check_route(request):
+        return JSONResponse({"status": "healthy", "agent": agent_name})
+
     # Store agent_executor in state for reference if needed
     starlette_app.state.agent_executor = agent_executor
 

@@ -37,6 +37,6 @@ ENV AGENT_PORT=9100
 EXPOSE 9100
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:9100/ || exit 1
+    CMD curl -f http://localhost:9100/health || exit 1
 
 CMD ["python", "-m", "src"]

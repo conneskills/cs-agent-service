@@ -333,13 +333,13 @@ researcher = LlmAgent(
 | Responsabilidad | Servicio | Justificación |
 |-----------------|----------|---------------|
 | **Almacenamiento y Versionado** | Phoenix (Arize) | Producto maduro con Playground y gestión de versiones nativa. |
-| **Mapping Lógico** | `cs-agent-registry-api` | Asocia un `agent_id` con un `phoenix_prompt_id`. No guarda el texto. |
+| **Mapping Lógico** | `cs-agent-registry-api` | Asocia un `agent_id` con un `phoenix_prompt_name`. No guarda el texto. |
 | **Validación de prompt** | **Agente (Runtime)** | Al arrancar, el agente valida su propia configuración contra el Registry y Phoenix. |
 | **Observabilidad** | Phoenix (Arize) | Tracing OTEL y evaluación de calidad integrada con el prompt management. |
 
 ### Estrategia de Delegación
 
-En lugar de reinventar la lógica de gestión de prompts, se delega en **Arize Phoenix**. La `ai-platform-api` asume que la metadata del agente (incluyendo su `phoenix_prompt_id`) ya fue registrada previamente en el Registry.
+En lugar de reinventar la lógica de gestión de prompts, se delega en **Arize Phoenix**. La `ai-platform-api` asume que la metadata del agente (incluyendo su `phoenix_prompt_name`) ya fue registrada previamente en el Registry.
 
 ### Cadena de resolución de prompt (Runtime en `cs-agent-service`)
 
@@ -347,7 +347,7 @@ Al arrancar, el agente consulta al Registry para saber qué `prompt_id` le corre
 
 ```
 1. prompt_inline en config      → usa directamente (para tests rápidos)
-2. phoenix_prompt_id en config  → descarga desde API de Phoenix (Fuente de verdad)
+2. phoenix_prompt_name en config  → descarga desde API de Phoenix (Fuente de verdad)
 3. prompt_ref en config         → fallback Registry (legacy)
 4. Archivo local                → /app/prompts/{role}.txt (fallback final)
 ```
@@ -472,7 +472,7 @@ sequenceDiagram
     PlatformAPI->>CloudRun: 6. Deploy service (AGENT_ID y REGISTRY_URL env vars)
     PlatformAPI->>Registry: 7. PATCH /agents/{agent_id}/url (registra URL final)
     CloudRun->>Registry: 8. GET /agents/{agent_id} (startup config)
-    Registry-->>CloudRun: 9. Retorna phoenix_prompt_id y MCP Config
+    Registry-->>CloudRun: 9. Retorna phoenix_prompt_name y MCP Config
     CloudRun->>Phoenix: 10. GET /prompts/{id} (descarga instrucción)
     CloudRun->>CloudRun: 11. Construye ADK Agent
 ```
@@ -597,7 +597,7 @@ Todas las operaciones de deploy descritas en este ADR se ejecutarán como **Jobs
 
 ## Modificaciones Requeridas al cs-agent-registry-api
 
-### 1. Soporte para `phoenix_prompt_id`
+### 1. Soporte para `phoenix_prompt_name`
 El modelo de `Agent` y `Role` debe incluir un campo para referenciar el ID de prompt en Phoenix. El Registry deja de ser fuente de verdad para el *texto* del prompt.
 
 ### 2. Ampliar `tool_ids` para soporte MCP
@@ -652,7 +652,7 @@ Simplificar el despliegue para que sea **Registry-first**:
 - [ ] Asegurar acceso de agentes al Secrets API.
 
 ### Fase 3 — Registry Upgrades (cs-agent-registry-api)
-- [ ] Añadir campo `phoenix_prompt_id` y mapping de herramientas MCP.
+- [ ] Añadir campo `phoenix_prompt_name` y mapping de herramientas MCP.
 - [ ] Exponer configuración `runtime_config` para agentes.
 
 ### Fase 4 — Observabilidad y Pipelines
@@ -696,7 +696,7 @@ graph TB
     PA -->|user credentials| SM
     
     AF -->|1. Get Config| REG
-    REG -->> AF: phoenix_prompt_id
+    REG -->> AF: phoenix_prompt_name
     AF -->|2. Get Prompt| PX
     AF -->|3. Get Secrets| PA
     
